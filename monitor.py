@@ -1247,51 +1247,53 @@ def _probe_fritz(host, tcp_timeout=0.6, http_timeout=1.5):
     return "FRITZ-Gerät"
 
 
+_IPV4_RE = re.compile(r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
+
+
 def _arp_neighbors():
-    """Return IPv4 neighbors from `ip neigh` (REACHABLE/STALE/DELAY)."""
-    try:
-        r = subprocess.run(["ip", "-4", "neigh"],
-                           capture_output=True, text=True, timeout=3)
-        if r.returncode != 0:
-            return []
-        out = []
+    """IPv4 neighbors from `ip neigh` (Linux) or `arp -a` (Windows/macOS)."""
+    for cmd in (["ip", "-4", "neigh"], ["arp", "-a"]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        except (FileNotFoundError, subprocess.SubprocessError):
+            continue
+        if r.returncode != 0 or not r.stdout.strip():
+            continue
+        out = set()
         for line in r.stdout.splitlines():
-            parts = line.split()
-            if not parts or parts[0].count(".") != 3:
-                continue
             if "FAILED" in line or "INCOMPLETE" in line:
                 continue
-            out.append(parts[0])
-        return out
+            m = _IPV4_RE.search(line)
+            if m:
+                out.add(m.group(1))
+        if out:
+            return sorted(out)
+    return []
+
+
+def _local_ip():
+    """Own outbound IPv4 address — cross-platform via UDP-connect trick."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 53))  # no packet is actually sent
+            return s.getsockname()[0]
+        finally:
+            s.close()
     except Exception:
-        return []
+        return None
 
 
 def _default_subnet_cidr():
-    """CIDR of the default-route interface, clipped to /24 max. None if unknown."""
+    """CIDR of the local /24 around our own IP. Cross-platform, no `ip` tool needed."""
     import ipaddress
-    try:
-        r = subprocess.run(["ip", "-4", "-json", "route", "show", "default"],
-                           capture_output=True, text=True, timeout=3)
-        routes = json.loads(r.stdout) if r.returncode == 0 else []
-    except Exception:
-        return None
-    dev = routes[0].get("dev") if routes else None
-    if not dev:
+    ip = _local_ip()
+    if not ip or ip.startswith("127."):
         return None
     try:
-        r = subprocess.run(["ip", "-4", "-json", "addr", "show", "dev", dev],
-                           capture_output=True, text=True, timeout=3)
-        addrs = json.loads(r.stdout) if r.returncode == 0 else []
+        return str(ipaddress.ip_interface(f"{ip}/24").network)
     except Exception:
         return None
-    for a in addrs:
-        for ai in a.get("addr_info", []):
-            if ai.get("family") != "inet":
-                continue
-            prefix = max(int(ai.get("prefixlen", 24)), 24)  # never scan bigger than /24
-            return str(ipaddress.ip_interface(f"{ai['local']}/{prefix}").network)
-    return None
 
 
 def _subnet_hosts(cidr):
