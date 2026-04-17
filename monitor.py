@@ -1398,25 +1398,26 @@ def setup_wizard():
             host = _prompt("Host/IP", default="fritz.powerline")
     print()
 
-    # ---- 2) Password (visible) ----
-    print(" 2) Passwort")
-    print("    Hinweis: wird während der Eingabe im Klartext angezeigt, damit du")
-    print("    Tippfehler sofort siehst. Gespeichert wird nur verschlüsselt.")
-    password = _prompt("FRITZ!Powerline Passwort")
-    print()
-
-    # ---- 3) Login ----
-    print(f" 3) Verbinde mit {host} …")
-    fritz = FritzPlc(host, password)
-    try:
-        fritz.login()
-    except Exception as e:
-        sys.exit(f"    ✗ Login fehlgeschlagen: {e}")
+    # ---- 2) Password + Login (retry on failure) ----
+    print(" 2) Passwort + Login")
+    print("    Hinweis: Passwort wird im Klartext angezeigt — Tippfehler sofort sichtbar.")
+    print("    Gespeichert wird nur verschlüsselt.")
+    while True:
+        password = _prompt("FRITZ!Powerline Passwort")
+        print(f"    Verbinde mit {host} …")
+        fritz = FritzPlc(host, password)
+        try:
+            fritz.login()
+            break
+        except Exception as e:
+            print(f"    ✗ Login fehlgeschlagen: {e}")
+            if not _yes(_prompt("Nochmal versuchen? (yes/no)", default="yes")):
+                sys.exit("abgebrochen.")
     print("    ✓ Login OK")
     print()
 
-    # ---- 4) Adapter picker ----
-    print(" 4) Adapter erkennen")
+    # ---- 3) Adapter picker ----
+    print(" 3) Adapter erkennen")
     try:
         adapters = (fritz.list_adapters() or {}).get("Adapters", [])
     except Exception as e:
@@ -1448,7 +1449,7 @@ def setup_wizard():
     print()
 
     # ---- 5) Optional settings ----
-    print(" 5) Optionale Einstellungen (Enter = Standard)")
+    print(" 4) Optionale Einstellungen (Enter = Standard)")
     port = _prompt("HTTP-Port für das Dashboard", default="8089")
     print()
 
@@ -1463,7 +1464,7 @@ def setup_wizard():
     print()
 
     # ---- 6) Summary + confirm ----
-    print(" 6) Zusammenfassung")
+    print(" 5) Zusammenfassung")
     print(f"    Host:          {host}")
     print(f"    Passwort:      {password}   ← wird gleich verschlüsselt")
     print(f"    Lokal-MAC:     {local.get('mac')}")
