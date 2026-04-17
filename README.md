@@ -12,7 +12,7 @@ Polls the adapter's hidden `/net/plc_json.lua` endpoint to read the per-carrier 
 - **Compact spectrum codec** — uint16 + zlib, ~960 B per sample (vs. ~10 KB JSON).
 - **Amateur-radio band overlay** — 160 m … 6 m bands labelled in every spectrum view, makes the regulatory notches visible at a glance.
 - **Info tab** with adapter details, SNR statistics, time-window aggregates, notch detection, and a primer on how HomePlug AV2 works.
-- **Setup wizard** prompts for IP/password and validates against the device on first run.
+- **Setup wizard** auto-discovers the powerline adapter on the LAN, validates the login against the device, lets you pick between multiple remote adapters if present, suggests a ping target from the ARP table, and stores the password encrypted (scrypt + HMAC-SHA256, machine-bound).
 
 No build step, no JS framework, no external Python dependencies — just `python3` and the system `ping` binary.
 
@@ -64,7 +64,8 @@ Edit `config.json` and `systemctl restart fritz-powerline` to apply.
 | Key | Default | Notes |
 |---|---|---|
 | `host` | `fritz.powerline` | IP or hostname of the **powerline adapter** (not the FRITZ!Box) |
-| `password` | — | Powerline adapter password (or the FRITZ!Box password, if paired) |
+| `password_enc` | — | Encrypted powerline password. Written by the setup wizard — do not edit by hand. |
+| `password_scheme` | — | KDF/cipher identifier for `password_enc` (currently `scrypt-hmac-sha256-v1`). |
 | `poll_seconds` | `3` | The chip refreshes spectrum data ~every 3 s; faster polling gets duplicates |
 | `http_port` | `8089` | LAN-exposed dashboard port |
 | `live_retention_hours` | `25` | How long to keep full-resolution samples before rollup |
@@ -90,7 +91,8 @@ Edit `config.json` and `systemctl restart fritz-powerline` to apply.
 
 ## Security notes
 
-- `config.json` contains the powerline password in plaintext. The setup wizard sets `chmod 600`; if you create it manually, do the same.
+- The powerline password is **encrypted at rest** in `config.json` as `password_enc`. The encryption key is derived from `/etc/machine-id` plus a per-install random salt kept in `.secret` (chmod 600, next to `config.json`). Leaking one of the two files alone does not reveal the password.
+- Both `config.json` and `.secret` are `chmod 600` and listed in `.gitignore`. If you move the install to a different host, re-run `python3 monitor.py --setup` — the ciphertext is not portable across machines.
 - The HTTP server binds `0.0.0.0` by default — anyone on your LAN can read the dashboard. Set `bind_addr` to `127.0.0.1` if you want to restrict it and reverse-proxy with auth.
 - ICMP ping requires either root or `CAP_NET_RAW` on the `ping` binary.
 

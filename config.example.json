@@ -1,6 +1,7 @@
 {
   "host": "fritz.powerline",
-  "password": "REPLACE_ME",
+  "password_enc": null,
+  "password_scheme": null,
   "local_mac": null,
   "remote_mac": null,
   "poll_seconds": 3,

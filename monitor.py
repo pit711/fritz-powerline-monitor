@@ -16,11 +16,14 @@ Usage:
 No external dependencies — Python 3.7+ stdlib + the system `ping` binary only.
 """
 import argparse
+import base64
 import hashlib
+import hmac
 import json
 import os
 import queue
 import re
+import socket
 import sqlite3
 import struct
 import subprocess
@@ -37,12 +40,16 @@ from socketserver import ThreadingMixIn
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
+SECRET_PATH = os.path.join(HERE, ".secret")
 DB_PATH = os.path.join(HERE, "data.db")
 DASHBOARD_HTML = os.path.join(HERE, "dashboard.html")
 
+PASSWORD_SCHEME = "scrypt-hmac-sha256-v1"
+
 DEFAULT_CONFIG = {
     "host": "fritz.powerline",          # IP or hostname of the FRITZ!Powerline adapter
-    "password": "",                      # set via setup wizard
+    "password_enc": None,                # encrypted via setup wizard (see PASSWORD_SCHEME)
+    "password_scheme": None,
     "local_mac": None,                   # auto-discovered if null
     "remote_mac": None,                  # auto-discovered if null
     "poll_seconds": 3,                   # FRITZ refreshes spectrum data every ~3 s
@@ -56,6 +63,78 @@ DEFAULT_CONFIG = {
     "ping_target": None,                 # IP for periodic ICMP ping; null disables
     "ping_timeout_seconds": 2,
 }
+
+
+# ============================================================================
+# Password encryption — stdlib-only (scrypt KDF + HMAC-SHA256 stream & tag)
+# ============================================================================
+# Key is bound to this machine via /etc/machine-id plus a per-install random
+# salt (.secret, chmod 600). Leaking config.json without either machine-id or
+# .secret does not reveal the password.
+
+def _machine_id():
+    for p in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            with open(p) as f:
+                v = f.read().strip()
+                if v:
+                    return v
+        except OSError:
+            pass
+    return socket.gethostname() or "fritz-powerline-monitor"
+
+
+def _install_salt():
+    if os.path.exists(SECRET_PATH):
+        with open(SECRET_PATH, "rb") as f:
+            data = f.read()
+        if len(data) >= 16:
+            return data
+    salt = os.urandom(32)
+    tmp = SECRET_PATH + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(salt)
+    os.chmod(tmp, 0o600)
+    os.rename(tmp, SECRET_PATH)
+    return salt
+
+
+def _derive_key():
+    return hashlib.scrypt(
+        _machine_id().encode("utf-8"),
+        salt=_install_salt(),
+        n=2 ** 14, r=8, p=1, dklen=32,
+    )
+
+
+def _keystream(key, nonce, length):
+    out = bytearray()
+    ctr = 0
+    while len(out) < length:
+        out += hmac.new(key, nonce + ctr.to_bytes(8, "big"), hashlib.sha256).digest()
+        ctr += 1
+    return bytes(out[:length])
+
+
+def encrypt_password(plaintext):
+    pt = plaintext.encode("utf-8")
+    key = _derive_key()
+    nonce = os.urandom(16)
+    ct = bytes(a ^ b for a, b in zip(pt, _keystream(key, nonce, len(pt))))
+    tag = hmac.new(key, nonce + ct, hashlib.sha256).digest()
+    return base64.b64encode(nonce + ct + tag).decode("ascii")
+
+
+def decrypt_password(token):
+    raw = base64.b64decode(token)
+    if len(raw) < 16 + 32:
+        raise ValueError("ciphertext too short")
+    nonce, ct, tag = raw[:16], raw[16:-32], raw[-32:]
+    key = _derive_key()
+    if not hmac.compare_digest(tag, hmac.new(key, nonce + ct, hashlib.sha256).digest()):
+        raise ValueError("authentication failed — machine-id or .secret changed?")
+    pt = bytes(a ^ b for a, b in zip(ct, _keystream(key, nonce, len(ct))))
+    return pt.decode("utf-8")
 
 
 _PING_RE = re.compile(r"time[=<]([\d.]+)\s*ms")
@@ -1124,15 +1203,84 @@ def _prompt(label, default=None, allow_empty=False):
             return default
         if val or allow_empty:
             return val
-        print("    (required)")
+        print("    (Pflichtfeld)")
+
+
+def _yes(val):
+    return val.strip().lower() in ("y", "yes", "j", "ja", "")
+
+
+def _is_fritz_host(host, timeout=2):
+    """Return True if `host` answers with an AVM login_sid.lua challenge."""
+    try:
+        req = urllib.request.Request(f"http://{host}/login_sid.lua?version=2")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read(2048).decode("utf-8", "ignore")
+            return "<Challenge>" in body and "<BlockTime>" in body
+    except Exception:
+        return False
+
+
+def _discover_fritz_hosts():
+    """Probe common AVM hostnames — fritz.powerline first, then fritz.box."""
+    hits = []
+    for name in ("fritz.powerline", "fritz.box"):
+        print(f"    … probiere {name}")
+        if _is_fritz_host(name):
+            hits.append(name)
+            print(f"      ✓ antwortet als FRITZ-Gerät")
+        else:
+            print(f"      – keine Antwort")
+    return hits
+
+
+def _arp_neighbors():
+    """Return IPv4 neighbors from `ip neigh` (REACHABLE/STALE/DELAY)."""
+    try:
+        r = subprocess.run(["ip", "-4", "neigh"],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode != 0:
+            return []
+        out = []
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if not parts or parts[0].count(".") != 3:
+                continue
+            if "FAILED" in line or "INCOMPLETE" in line:
+                continue
+            out.append(parts[0])
+        return out
+    except Exception:
+        return []
+
+
+def _pick(label, items, fmt, default_idx=0):
+    """Numbered picker; single-item lists return immediately."""
+    if len(items) == 1:
+        print(f"    → {fmt(items[0])}")
+        return items[0]
+    print(f"  {label}:")
+    for i, it in enumerate(items, 1):
+        marker = "→" if i - 1 == default_idx else " "
+        print(f"    {marker} [{i}] {fmt(it)}")
+    while True:
+        val = input(f"  Auswahl [1-{len(items)}, Enter={default_idx + 1}]: ").strip()
+        if not val:
+            return items[default_idx]
+        try:
+            idx = int(val) - 1
+            if 0 <= idx < len(items):
+                return items[idx]
+        except ValueError:
+            pass
+        print("    (ungültig)")
 
 
 def setup_wizard():
     """Interactive first-run setup. Validates against the device, then writes config.json."""
-    import getpass
     if not sys.stdin.isatty():
-        sys.exit(f"{CONFIG_PATH} not found and no TTY available — "
-                 f"copy config.example.json to config.json and edit it manually.")
+        sys.exit(f"{CONFIG_PATH} nicht gefunden und kein TTY — "
+                 f"bitte python3 monitor.py --setup auf einer interaktiven Shell aufrufen.")
 
     print()
     print("==============================================================")
@@ -1140,78 +1288,148 @@ def setup_wizard():
     print("==============================================================")
     print()
     if os.path.exists(CONFIG_PATH):
-        print(f"  Existing config at {CONFIG_PATH} will be overwritten.")
-        if _prompt("Continue? (yes/no)", default="no").lower() not in ("y", "yes"):
-            sys.exit("aborted.")
+        print(f"  Bestehende Konfiguration in {CONFIG_PATH} wird überschrieben.")
+        if not _yes(_prompt("Fortfahren? (yes/no)", default="no")):
+            sys.exit("abgebrochen.")
         print()
 
-    print(" Connection")
-    host = _prompt("FRITZ!Powerline IP or hostname", default="fritz.powerline")
-    password = getpass.getpass("  FRITZ!Powerline password: ")
-    if not password:
-        sys.exit("password is required.")
-
+    # ---- 1) Host discovery ----
+    print(" 1) FRITZ!Powerline-Gerät suchen")
+    hits = _discover_fritz_hosts()
     print()
-    print(f" Testing connection to {host} …")
+    if hits:
+        host = _pick("Gefundene Geräte", hits, lambda h: h)
+        override = _prompt("Anderen Host verwenden? (leer = übernehmen)",
+                           default="", allow_empty=True)
+        if override:
+            host = override
+    else:
+        print("  ⚠ nichts automatisch gefunden — bitte manuell eingeben.")
+        host = _prompt("Host/IP", default="fritz.powerline")
+    print()
+
+    # ---- 2) Password (visible) ----
+    print(" 2) Passwort")
+    print("    Hinweis: wird während der Eingabe im Klartext angezeigt, damit du")
+    print("    Tippfehler sofort siehst. Gespeichert wird nur verschlüsselt.")
+    password = _prompt("FRITZ!Powerline Passwort")
+    print()
+
+    # ---- 3) Login ----
+    print(f" 3) Verbinde mit {host} …")
     fritz = FritzPlc(host, password)
     try:
         fritz.login()
     except Exception as e:
-        sys.exit(f"  ✗ login failed: {e}")
-    print(f"  ✓ login OK")
+        sys.exit(f"    ✗ Login fehlgeschlagen: {e}")
+    print("    ✓ Login OK")
+    print()
 
+    # ---- 4) Adapter picker ----
+    print(" 4) Adapter erkennen")
     try:
         adapters = (fritz.list_adapters() or {}).get("Adapters", [])
     except Exception as e:
-        sys.exit(f"  ✗ ListAdapters failed: {e}")
+        sys.exit(f"    ✗ ListAdapters fehlgeschlagen: {e}")
 
-    local = next((a for a in adapters if a.get("isLocal") and a.get("active")), None)
-    remote = next((a for a in adapters if not a.get("isLocal") and a.get("active")), None)
-    if not local:
-        sys.exit("  ✗ no active local adapter found.")
-    print(f"  ✓ local adapter:  {local.get('mac')}  ({local.get('usr')})")
-    if remote:
-        print(f"  ✓ remote adapter: {remote.get('mac')} ({remote.get('usr')})")
-    else:
-        print("  ⚠ no active remote adapter paired — spectrum data will be limited "
-              "until you pair one via the FRITZ!Box / button.")
+    locals_ = [a for a in adapters if a.get("isLocal") and a.get("active")]
+    remotes = [a for a in adapters if not a.get("isLocal") and a.get("active")]
+    inactive = [a for a in adapters if not a.get("active")]
+    if not locals_:
+        sys.exit("    ✗ kein aktiver lokaler Adapter gefunden.")
+
+    def fmt_adapter(a):
+        return (f"{a.get('mac')}  {(a.get('usr') or '?'):<14}  "
+                f"status={a.get('status','?')}  coupling={a.get('couplingClass','?')}")
 
     print()
-    print(" Optional settings (press Enter to accept default)")
-    port = _prompt("HTTP port for the dashboard", default="8089")
-    ping_target = _prompt(
-        "Ping target IP — set to a host BEHIND the remote adapter to measure\n"
-        "    powerline link RTT, or leave blank to disable",
-        default="", allow_empty=True,
-    ) or None
+    print("  Lokal:")
+    local = _pick("Lokale Adapter", locals_, fmt_adapter)
+    print()
+    if remotes:
+        print("  Remote:")
+        remote = _pick("Remote-Adapter", remotes, fmt_adapter)
+    else:
+        remote = None
+        print("  ⚠ kein aktiver Remote-Adapter — Spektrum bleibt leer, bis du")
+        print("    einen zweiten FRITZ!Powerline per Pairing-Taste koppelst.")
+    if inactive:
+        print(f"  (ignoriert: {len(inactive)} inaktive Adapter)")
+    print()
+
+    # ---- 5) Optional settings ----
+    print(" 5) Optionale Einstellungen (Enter = Standard)")
+    port = _prompt("HTTP-Port für das Dashboard", default="8089")
+    print()
+
+    print("  Ping-Ziel (IP hinter dem Remote-Adapter, misst die Powerline-Latenz).")
+    neighbors = _arp_neighbors()
+    if neighbors:
+        print("  ARP-Nachbarn auf diesem Host:")
+        for n in neighbors[:12]:
+            print(f"    • {n}")
+    ping_target = _prompt("Ping-Ziel (leer = deaktiviert)",
+                          default="", allow_empty=True) or None
+    print()
+
+    # ---- 6) Summary + confirm ----
+    print(" 6) Zusammenfassung")
+    print(f"    Host:          {host}")
+    print(f"    Passwort:      {password}   ← wird gleich verschlüsselt")
+    print(f"    Lokal-MAC:     {local.get('mac')}")
+    print(f"    Remote-MAC:    {remote.get('mac') if remote else '—'}")
+    print(f"    HTTP-Port:     {port}")
+    print(f"    Ping-Ziel:     {ping_target or '—'}")
+    print()
+    if not _yes(_prompt("Speichern? (yes/no)", default="yes")):
+        sys.exit("abgebrochen.")
 
     cfg = dict(DEFAULT_CONFIG)
     cfg.update({
         "host": host,
-        "password": password,
+        "password_enc": encrypt_password(password),
+        "password_scheme": PASSWORD_SCHEME,
         "http_port": int(port),
         "ping_target": ping_target,
         "local_mac": local.get("mac"),
         "remote_mac": remote.get("mac") if remote else None,
     })
 
-    with open(CONFIG_PATH, "w") as f:
+    tmp = CONFIG_PATH + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(cfg, f, indent=2)
-    os.chmod(CONFIG_PATH, 0o600)
+    os.chmod(tmp, 0o600)
+    os.rename(tmp, CONFIG_PATH)
 
     print()
-    print(f"  ✓ wrote {CONFIG_PATH} (chmod 600)")
+    print(f"  ✓ {CONFIG_PATH} gespeichert (chmod 600, Passwort verschlüsselt)")
+    print(f"  ✓ {SECRET_PATH} enthält den Maschinen-Salt (chmod 600, niemals in Git committen)")
     print()
-    print(" Next steps:")
-    print("   • Run in foreground to test:    python3 monitor.py")
-    print("   • Or install as a service:      see README.md  →  systemd")
-    print(f"   • Open the dashboard:           http://<this-host>:{port}/")
+    print(" Nächste Schritte:")
+    print("    • Test im Vordergrund:          python3 monitor.py")
+    print("    • Als Dienst installieren:      siehe README.md  →  systemd")
+    print(f"    • Dashboard öffnen:             http://<dieser-host>:{port}/")
     print()
 
 
 def load_config():
     with open(CONFIG_PATH) as f:
-        return {**DEFAULT_CONFIG, **json.load(f)}
+        raw = json.load(f)
+    cfg = {**DEFAULT_CONFIG, **raw}
+    if "password" in raw:
+        sys.exit(
+            "config: Klartext-Feld 'password' wird nicht mehr unterstützt — "
+            "bitte python3 monitor.py --setup neu ausführen (hard cutover zu 'password_enc')."
+        )
+    enc = cfg.get("password_enc")
+    if not enc:
+        sys.exit("config: 'password_enc' fehlt — bitte python3 monitor.py --setup ausführen.")
+    try:
+        cfg["password"] = decrypt_password(enc)
+    except Exception as e:
+        sys.exit(f"config: Passwort konnte nicht entschlüsselt werden ({e}) — "
+                 f"ggf. .secret verloren? Dann python3 monitor.py --setup erneut ausführen.")
+    return cfg
 
 
 # ============================================================================
@@ -1231,8 +1449,6 @@ def main():
             return
 
     cfg = load_config()
-    if not cfg.get("password"):
-        sys.exit("config: 'password' is missing — run: python3 monitor.py --setup")
 
     if args.rollup:
         conn = db_connect()
