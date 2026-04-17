@@ -1210,28 +1210,41 @@ def _yes(val):
     return val.strip().lower() in ("y", "yes", "j", "ja", "")
 
 
-def _is_fritz_host(host, timeout=2):
-    """Return True if `host` answers with an AVM login_sid.lua challenge."""
+_FRITZ_TITLE_RE = re.compile(r"<title>([^<]*FRITZ[^<]*)</title>", re.IGNORECASE)
+# Matches "FRITZ!Powerline 540E", "FRITZ!Box 7590", "FRITZ!Box 5530 Fiber", …
+_FRITZ_MODEL_RE = re.compile(r"FRITZ![A-Za-z!]+\s+\d+[A-Za-z]*(?:\s+[A-Za-z]+)?")
+
+
+def _probe_fritz(host, tcp_timeout=0.6, http_timeout=1.5):
+    """Probe one host for an AVM web UI. Returns a label string, or None."""
     try:
-        req = urllib.request.Request(f"http://{host}/login_sid.lua?version=2")
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            body = r.read(2048).decode("utf-8", "ignore")
-            return "<Challenge>" in body and "<BlockTime>" in body
+        with socket.create_connection((host, 80), timeout=tcp_timeout):
+            pass
     except Exception:
-        return False
-
-
-def _discover_fritz_hosts():
-    """Probe common AVM hostnames — fritz.powerline first, then fritz.box."""
-    hits = []
-    for name in ("fritz.powerline", "fritz.box"):
-        print(f"    … probiere {name}")
-        if _is_fritz_host(name):
-            hits.append(name)
-            print(f"      ✓ antwortet als FRITZ-Gerät")
-        else:
-            print(f"      – keine Antwort")
-    return hits
+        return None
+    try:
+        with urllib.request.urlopen(
+            f"http://{host}/login_sid.lua?version=2", timeout=http_timeout) as r:
+            body = r.read(2048).decode("utf-8", "ignore")
+        if "<Challenge>" not in body or "<BlockTime>" not in body:
+            return None
+    except Exception:
+        return None
+    # Confirmed AVM device — try to extract a concrete model name.
+    # Login title often lacks the model number ("FRITZ!Powerline"), so prefer
+    # the first model-like pattern in the HTML body, falling back to the title.
+    try:
+        with urllib.request.urlopen(f"http://{host}/", timeout=http_timeout) as r:
+            html = r.read(32768).decode("utf-8", "ignore")
+        m = _FRITZ_MODEL_RE.search(html)
+        if m:
+            return " ".join(m.group(0).split())
+        t = _FRITZ_TITLE_RE.search(html)
+        if t:
+            return " ".join(t.group(1).split())
+    except Exception:
+        pass
+    return "FRITZ-Gerät"
 
 
 def _arp_neighbors():
@@ -1252,6 +1265,72 @@ def _arp_neighbors():
         return out
     except Exception:
         return []
+
+
+def _default_subnet_cidr():
+    """CIDR of the default-route interface, clipped to /24 max. None if unknown."""
+    import ipaddress
+    try:
+        r = subprocess.run(["ip", "-4", "-json", "route", "show", "default"],
+                           capture_output=True, text=True, timeout=3)
+        routes = json.loads(r.stdout) if r.returncode == 0 else []
+    except Exception:
+        return None
+    dev = routes[0].get("dev") if routes else None
+    if not dev:
+        return None
+    try:
+        r = subprocess.run(["ip", "-4", "-json", "addr", "show", "dev", dev],
+                           capture_output=True, text=True, timeout=3)
+        addrs = json.loads(r.stdout) if r.returncode == 0 else []
+    except Exception:
+        return None
+    for a in addrs:
+        for ai in a.get("addr_info", []):
+            if ai.get("family") != "inet":
+                continue
+            prefix = max(int(ai.get("prefixlen", 24)), 24)  # never scan bigger than /24
+            return str(ipaddress.ip_interface(f"{ai['local']}/{prefix}").network)
+    return None
+
+
+def _subnet_hosts(cidr):
+    import ipaddress
+    return [str(h) for h in ipaddress.ip_network(cidr, strict=False).hosts()]
+
+
+def _scan_fritz_hosts():
+    """Parallel scan: hostnames + ARP neighbors + local /24 subnet."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    candidates = set(["fritz.powerline", "fritz.box"])
+    candidates.update(_arp_neighbors())
+    cidr = _default_subnet_cidr()
+    if cidr:
+        candidates.update(_subnet_hosts(cidr))
+        print(f"    … scanne {len(candidates)} Hosts ({cidr} + Hostnames) parallel")
+    else:
+        print(f"    … scanne {len(candidates)} Hosts parallel (kein Subnetz erkannt)")
+
+    hits = []
+    with ThreadPoolExecutor(max_workers=48) as ex:
+        futures = {ex.submit(_probe_fritz, h): h for h in candidates}
+        for fut in as_completed(futures):
+            host = futures[fut]
+            label = fut.result()
+            if label:
+                hits.append({"host": host, "label": label})
+                print(f"      ✓ {host:<18}  {label}")
+
+    def sort_key(h):
+        host = h["host"]
+        is_powerline = "Powerline" in (h.get("label") or "")
+        parts = host.split(".")
+        is_ip = len(parts) == 4 and all(p.isdigit() for p in parts)
+        ip_tuple = tuple(int(p) for p in parts) if is_ip else (0, 0, 0, 0)
+        # Powerline first, then hostnames, then IPs in numeric order
+        return (0 if is_powerline else 1, 0 if not is_ip else 1, ip_tuple, host)
+    hits.sort(key=sort_key)
+    return hits
 
 
 def _pick(label, items, fmt, default_idx=0):
@@ -1294,17 +1373,21 @@ def setup_wizard():
         print()
 
     # ---- 1) Host discovery ----
-    print(" 1) FRITZ!Powerline-Gerät suchen")
-    hits = _discover_fritz_hosts()
+    print(" 1) FRITZ-Geräte im lokalen Netz suchen")
+    hits = _scan_fritz_hosts()
     print()
     if hits:
-        host = _pick("Gefundene Geräte", hits, lambda h: h)
-        override = _prompt("Anderen Host verwenden? (leer = übernehmen)",
+        host_obj = _pick("Gefundene FRITZ-Geräte",
+                         hits, lambda h: f"{h['host']:<18}  {h['label']}")
+        host = host_obj["host"]
+        override = _prompt("Anderen Host/IP verwenden? (leer = übernehmen)",
                            default="", allow_empty=True)
         if override:
             host = override
     else:
         print("  ⚠ nichts automatisch gefunden — bitte manuell eingeben.")
+        print("    (tipp: im FRITZ!Box-Webui unter 'Heimnetz → Netzwerk' nach dem")
+        print("           Powerline-Gerät + dessen IP schauen)")
         host = _prompt("Host/IP", default="fritz.powerline")
     print()
 
