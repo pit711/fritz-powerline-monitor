@@ -1373,22 +1373,29 @@ def setup_wizard():
         print()
 
     # ---- 1) Host discovery ----
-    print(" 1) FRITZ-Geräte im lokalen Netz suchen")
-    hits = _scan_fritz_hosts()
+    print(" 1) FRITZ!Powerline-Gerät festlegen")
+    print("    [1] Netzwerk scannen (findet alle FRITZ-Geräte im lokalen /24)")
+    print("    [2] IP / Hostname manuell eingeben")
+    mode = _prompt("Auswahl [1-2, Enter=1]", default="1", allow_empty=True) or "1"
     print()
-    if hits:
-        host_obj = _pick("Gefundene FRITZ-Geräte",
-                         hits, lambda h: f"{h['host']:<18}  {h['label']}")
-        host = host_obj["host"]
-        override = _prompt("Anderen Host/IP verwenden? (leer = übernehmen)",
-                           default="", allow_empty=True)
-        if override:
-            host = override
-    else:
-        print("  ⚠ nichts automatisch gefunden — bitte manuell eingeben.")
-        print("    (tipp: im FRITZ!Box-Webui unter 'Heimnetz → Netzwerk' nach dem")
-        print("           Powerline-Gerät + dessen IP schauen)")
+    if mode.strip() == "2":
         host = _prompt("Host/IP", default="fritz.powerline")
+    else:
+        hits = _scan_fritz_hosts()
+        print()
+        if hits:
+            host_obj = _pick("Gefundene FRITZ-Geräte",
+                             hits, lambda h: f"{h['host']:<18}  {h['label']}")
+            host = host_obj["host"]
+            override = _prompt("Anderen Host/IP verwenden? (leer = übernehmen)",
+                               default="", allow_empty=True)
+            if override:
+                host = override
+        else:
+            print("  ⚠ nichts automatisch gefunden — bitte manuell eingeben.")
+            print("    (tipp: im FRITZ!Box-Webui unter 'Heimnetz → Netzwerk' nach dem")
+            print("           Powerline-Gerät + dessen IP schauen)")
+            host = _prompt("Host/IP", default="fritz.powerline")
     print()
 
     # ---- 2) Password (visible) ----
