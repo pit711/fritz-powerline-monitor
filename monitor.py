@@ -62,7 +62,130 @@ DEFAULT_CONFIG = {
     "granularity": 4,                    # carrier downsampling factor (matches AVM webui)
     "ping_target": None,                 # IP for periodic ICMP ping; null disables
     "ping_timeout_seconds": 2,
+    "language": "en",                    # setup wizard + config-error language ("en" or "de")
 }
+
+
+# ============================================================================
+# Setup wizard localisation
+# ============================================================================
+
+_LANG = "en"
+
+_TEXTS = {
+    "required":       {"de": "(Pflichtfeld)", "en": "(required)"},
+    "invalid":        {"de": "(ungültig)", "en": "(invalid)"},
+    "pick_prompt":    {"de": "Auswahl [1-{n}, Enter={d}]", "en": "Choice [1-{n}, Enter={d}]"},
+    "no_tty":         {"de": "{path} nicht gefunden und kein TTY — bitte python3 monitor.py --setup auf einer interaktiven Shell aufrufen.",
+                       "en": "{path} not found and no TTY — please run python3 monitor.py --setup in an interactive shell."},
+    "overwrite":      {"de": "  Bestehende Konfiguration in {path} wird überschrieben.",
+                       "en": "  Existing config at {path} will be overwritten."},
+    "continue_q":     {"de": "Fortfahren? (yes/no)", "en": "Continue? (yes/no)"},
+    "aborted":        {"de": "abgebrochen.", "en": "aborted."},
+    "step_1":         {"de": " 1) FRITZ!Powerline-Gerät festlegen",
+                       "en": " 1) Pick FRITZ!Powerline device"},
+    "step_1_scan":    {"de": "    [1] Netzwerk scannen (findet alle FRITZ-Geräte im lokalen /24)",
+                       "en": "    [1] Scan network (finds all FRITZ devices on the local /24)"},
+    "step_1_manual":  {"de": "    [2] IP / Hostname manuell eingeben",
+                       "en": "    [2] Enter IP / hostname manually"},
+    "step_1_choice":  {"de": "Auswahl [1-2, Enter=1]", "en": "Choice [1-2, Enter=1]"},
+    "host_ip":        {"de": "Host/IP", "en": "Host/IP"},
+    "scan_subnet":    {"de": "    … scanne {n} Hosts ({cidr} + Hostnames) parallel",
+                       "en": "    … scanning {n} hosts ({cidr} + hostnames) in parallel"},
+    "scan_nosubnet":  {"de": "    … scanne {n} Hosts parallel (kein Subnetz erkannt)",
+                       "en": "    … scanning {n} hosts in parallel (subnet not detected)"},
+    "found_fritz":    {"de": "Gefundene FRITZ-Geräte", "en": "Found FRITZ devices"},
+    "use_other":      {"de": "Anderen Host/IP verwenden? (leer = übernehmen)",
+                       "en": "Use a different host/IP? (blank = keep)"},
+    "nothing_found":  {"de": "  ⚠ nichts automatisch gefunden — bitte manuell eingeben.",
+                       "en": "  ⚠ nothing found automatically — please enter manually."},
+    "hint_box":       {"de": "    (Tipp: im FRITZ!Box-Webui unter 'Heimnetz → Netzwerk' nach dem\n           Powerline-Gerät + dessen IP schauen)",
+                       "en": "    (hint: in the FRITZ!Box webui under 'Home Network → Network' look\n           for the powerline device and its IP)"},
+    "step_2":         {"de": " 2) Passwort + Login", "en": " 2) Password + login"},
+    "step_2_hint":    {"de": "    Hinweis: Passwort wird im Klartext angezeigt — Tippfehler sofort sichtbar.\n    Gespeichert wird nur verschlüsselt.",
+                       "en": "    Note: password is shown in plaintext while typing — typos visible immediately.\n    Stored encrypted only."},
+    "password":       {"de": "FRITZ!Powerline Passwort", "en": "FRITZ!Powerline password"},
+    "connecting":     {"de": "    Verbinde mit {host} …", "en": "    Connecting to {host} …"},
+    "login_failed":   {"de": "    ✗ Login fehlgeschlagen: {err}", "en": "    ✗ Login failed: {err}"},
+    "retry_q":        {"de": "Nochmal versuchen? (yes/no)", "en": "Try again? (yes/no)"},
+    "login_ok":       {"de": "    ✓ Login OK", "en": "    ✓ Login OK"},
+    "step_3":         {"de": " 3) Adapter erkennen", "en": " 3) Detect adapters"},
+    "listadapters_failed": {"de": "    ✗ ListAdapters fehlgeschlagen: {err}",
+                            "en": "    ✗ ListAdapters failed: {err}"},
+    "no_local":       {"de": "    ✗ kein aktiver lokaler Adapter gefunden.",
+                       "en": "    ✗ no active local adapter found."},
+    "local_label":    {"de": "  Lokal:", "en": "  Local:"},
+    "local_adapters": {"de": "Lokale Adapter", "en": "Local adapters"},
+    "remote_label":   {"de": "  Remote:", "en": "  Remote:"},
+    "remote_adapters":{"de": "Remote-Adapter", "en": "Remote adapters"},
+    "no_remote":      {"de": "  ⚠ kein aktiver Remote-Adapter — Spektrum bleibt leer, bis du\n    einen zweiten FRITZ!Powerline per Pairing-Taste koppelst.",
+                       "en": "  ⚠ no active remote adapter — spectrum will stay empty until you\n    pair a second FRITZ!Powerline with the pairing button."},
+    "inactive":       {"de": "  (ignoriert: {n} inaktive Adapter)",
+                       "en": "  (ignored: {n} inactive adapters)"},
+    "step_4":         {"de": " 4) Optionale Einstellungen (Enter = Standard)",
+                       "en": " 4) Optional settings (Enter = default)"},
+    "port_prompt":    {"de": "HTTP-Port für das Dashboard", "en": "HTTP port for the dashboard"},
+    "ping_hint":      {"de": "  Ping-Ziel (IP hinter dem Remote-Adapter, misst die Powerline-Latenz).",
+                       "en": "  Ping target (IP behind the remote adapter — measures powerline latency)."},
+    "arp_neighbors":  {"de": "  ARP-Nachbarn auf diesem Host:",
+                       "en": "  ARP neighbors on this host:"},
+    "ping_prompt":    {"de": "Ping-Ziel (leer = deaktiviert)",
+                       "en": "Ping target (blank = disabled)"},
+    "step_5":         {"de": " 5) Zusammenfassung", "en": " 5) Summary"},
+    "sum_host":       {"de": "Host",        "en": "Host"},
+    "sum_password":   {"de": "Passwort",    "en": "Password"},
+    "sum_password_note": {"de": "← wird gleich verschlüsselt",
+                          "en": "← will be encrypted in a moment"},
+    "sum_local":      {"de": "Lokal-MAC",   "en": "Local MAC"},
+    "sum_remote":     {"de": "Remote-MAC",  "en": "Remote MAC"},
+    "sum_port":       {"de": "HTTP-Port",   "en": "HTTP port"},
+    "sum_ping":       {"de": "Ping-Ziel",   "en": "Ping target"},
+    "save_q":         {"de": "Speichern? (yes/no)", "en": "Save? (yes/no)"},
+    "saved_config":   {"de": "  ✓ {path} gespeichert (chmod 600, Passwort verschlüsselt)",
+                       "en": "  ✓ {path} saved (chmod 600, password encrypted)"},
+    "saved_secret":   {"de": "  ✓ {path} enthält den Maschinen-Salt (chmod 600, niemals in Git committen)",
+                       "en": "  ✓ {path} holds the machine salt (chmod 600, never commit to git)"},
+    "next_steps":     {"de": " Nächste Schritte:", "en": " Next steps:"},
+    "next_test":      {"de": "    • Test im Vordergrund:          python3 monitor.py",
+                       "en": "    • Test in foreground:           python3 monitor.py"},
+    "next_service":   {"de": "    • Als Dienst installieren:      siehe README.md  →  systemd",
+                       "en": "    • Install as a service:         see README.md  →  systemd"},
+    "next_dashboard": {"de": "    • Dashboard öffnen:             http://<dieser-host>:{port}/",
+                       "en": "    • Open dashboard:               http://<this-host>:{port}/"},
+    "err_legacy_pw":  {"de": "config: Klartext-Feld 'password' wird nicht mehr unterstützt — bitte python3 monitor.py --setup neu ausführen (hard cutover zu 'password_enc').",
+                       "en": "config: legacy plaintext 'password' field is no longer supported — please re-run python3 monitor.py --setup (hard cutover to 'password_enc')."},
+    "err_no_pw":      {"de": "config: 'password_enc' fehlt — bitte python3 monitor.py --setup ausführen.",
+                       "en": "config: 'password_enc' missing — please run python3 monitor.py --setup."},
+    "err_decrypt":    {"de": "config: Passwort konnte nicht entschlüsselt werden ({err}) — ggf. .secret verloren? Dann python3 monitor.py --setup erneut ausführen.",
+                       "en": "config: could not decrypt password ({err}) — .secret lost? Re-run python3 monitor.py --setup."},
+}
+
+
+def T(key, **kw):
+    d = _TEXTS.get(key)
+    if d is None:
+        return key
+    s = d.get(_LANG) or d.get("en") or next(iter(d.values()))
+    return s.format(**kw) if kw else s
+
+
+def _pick_language():
+    """Set the module-global _LANG. Prompt is bilingual since we don't know yet."""
+    global _LANG
+    default = "2" if _LANG == "en" else "1"
+    print()
+    print("  Language / Sprache:")
+    print("    [1] Deutsch")
+    print("    [2] English")
+    while True:
+        val = input(f"  Choice / Auswahl [1-2, Enter={default}]: ").strip() or default
+        if val == "1":
+            _LANG = "de"
+            return
+        if val == "2":
+            _LANG = "en"
+            return
+        print("    (invalid / ungültig)")
 
 
 # ============================================================================
@@ -1203,7 +1326,7 @@ def _prompt(label, default=None, allow_empty=False):
             return default
         if val or allow_empty:
             return val
-        print("    (Pflichtfeld)")
+        print(f"    {T('required')}")
 
 
 def _yes(val):
@@ -1309,9 +1432,9 @@ def _scan_fritz_hosts():
     cidr = _default_subnet_cidr()
     if cidr:
         candidates.update(_subnet_hosts(cidr))
-        print(f"    … scanne {len(candidates)} Hosts ({cidr} + Hostnames) parallel")
+        print(T("scan_subnet", n=len(candidates), cidr=cidr))
     else:
-        print(f"    … scanne {len(candidates)} Hosts parallel (kein Subnetz erkannt)")
+        print(T("scan_nosubnet", n=len(candidates)))
 
     hits = []
     with ThreadPoolExecutor(max_workers=48) as ex:
@@ -1344,8 +1467,9 @@ def _pick(label, items, fmt, default_idx=0):
     for i, it in enumerate(items, 1):
         marker = "→" if i - 1 == default_idx else " "
         print(f"    {marker} [{i}] {fmt(it)}")
+    prompt = T("pick_prompt", n=len(items), d=default_idx + 1)
     while True:
-        val = input(f"  Auswahl [1-{len(items)}, Enter={default_idx + 1}]: ").strip()
+        val = input(f"  {prompt}: ").strip()
         if not val:
             return items[default_idx]
         try:
@@ -1354,128 +1478,136 @@ def _pick(label, items, fmt, default_idx=0):
                 return items[idx]
         except ValueError:
             pass
-        print("    (ungültig)")
+        print(f"    {T('invalid')}")
 
 
 def setup_wizard():
     """Interactive first-run setup. Validates against the device, then writes config.json."""
+    global _LANG
     if not sys.stdin.isatty():
-        sys.exit(f"{CONFIG_PATH} nicht gefunden und kein TTY — "
-                 f"bitte python3 monitor.py --setup auf einer interaktiven Shell aufrufen.")
+        sys.exit(T("no_tty", path=CONFIG_PATH))
+
+    # Seed language default from an existing config, if present.
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH) as f:
+                lang = json.load(f).get("language")
+            if lang in ("de", "en"):
+                _LANG = lang
+        except Exception:
+            pass
 
     print()
     print("==============================================================")
     print(" FRITZ!Powerline Monitor — Setup")
     print("==============================================================")
+
+    _pick_language()
+
     print()
     if os.path.exists(CONFIG_PATH):
-        print(f"  Bestehende Konfiguration in {CONFIG_PATH} wird überschrieben.")
-        if not _yes(_prompt("Fortfahren? (yes/no)", default="no")):
-            sys.exit("abgebrochen.")
+        print(T("overwrite", path=CONFIG_PATH))
+        if not _yes(_prompt(T("continue_q"), default="no")):
+            sys.exit(T("aborted"))
         print()
 
     # ---- 1) Host discovery ----
-    print(" 1) FRITZ!Powerline-Gerät festlegen")
-    print("    [1] Netzwerk scannen (findet alle FRITZ-Geräte im lokalen /24)")
-    print("    [2] IP / Hostname manuell eingeben")
-    mode = _prompt("Auswahl [1-2, Enter=1]", default="1", allow_empty=True) or "1"
+    print(T("step_1"))
+    print(T("step_1_scan"))
+    print(T("step_1_manual"))
+    mode = _prompt(T("step_1_choice"), default="1", allow_empty=True) or "1"
     print()
     if mode.strip() == "2":
-        host = _prompt("Host/IP", default="fritz.powerline")
+        host = _prompt(T("host_ip"), default="fritz.powerline")
     else:
         hits = _scan_fritz_hosts()
         print()
         if hits:
-            host_obj = _pick("Gefundene FRITZ-Geräte",
+            host_obj = _pick(T("found_fritz"),
                              hits, lambda h: f"{h['host']:<18}  {h['label']}")
             host = host_obj["host"]
-            override = _prompt("Anderen Host/IP verwenden? (leer = übernehmen)",
-                               default="", allow_empty=True)
+            override = _prompt(T("use_other"), default="", allow_empty=True)
             if override:
                 host = override
         else:
-            print("  ⚠ nichts automatisch gefunden — bitte manuell eingeben.")
-            print("    (tipp: im FRITZ!Box-Webui unter 'Heimnetz → Netzwerk' nach dem")
-            print("           Powerline-Gerät + dessen IP schauen)")
-            host = _prompt("Host/IP", default="fritz.powerline")
+            print(T("nothing_found"))
+            print(T("hint_box"))
+            host = _prompt(T("host_ip"), default="fritz.powerline")
     print()
 
-    # ---- 2) Password + Login (retry on failure) ----
-    print(" 2) Passwort + Login")
-    print("    Hinweis: Passwort wird im Klartext angezeigt — Tippfehler sofort sichtbar.")
-    print("    Gespeichert wird nur verschlüsselt.")
+    # ---- 2) Password + login (retry on failure) ----
+    print(T("step_2"))
+    print(T("step_2_hint"))
     while True:
-        password = _prompt("FRITZ!Powerline Passwort")
-        print(f"    Verbinde mit {host} …")
+        password = _prompt(T("password"))
+        print(T("connecting", host=host))
         fritz = FritzPlc(host, password)
         try:
             fritz.login()
             break
         except Exception as e:
-            print(f"    ✗ Login fehlgeschlagen: {e}")
-            if not _yes(_prompt("Nochmal versuchen? (yes/no)", default="yes")):
-                sys.exit("abgebrochen.")
-    print("    ✓ Login OK")
+            print(T("login_failed", err=e))
+            if not _yes(_prompt(T("retry_q"), default="yes")):
+                sys.exit(T("aborted"))
+    print(T("login_ok"))
     print()
 
     # ---- 3) Adapter picker ----
-    print(" 3) Adapter erkennen")
+    print(T("step_3"))
     try:
         adapters = (fritz.list_adapters() or {}).get("Adapters", [])
     except Exception as e:
-        sys.exit(f"    ✗ ListAdapters fehlgeschlagen: {e}")
+        sys.exit(T("listadapters_failed", err=e))
 
     locals_ = [a for a in adapters if a.get("isLocal") and a.get("active")]
     remotes = [a for a in adapters if not a.get("isLocal") and a.get("active")]
     inactive = [a for a in adapters if not a.get("active")]
     if not locals_:
-        sys.exit("    ✗ kein aktiver lokaler Adapter gefunden.")
+        sys.exit(T("no_local"))
 
     def fmt_adapter(a):
         return (f"{a.get('mac')}  {(a.get('usr') or '?'):<14}  "
                 f"status={a.get('status','?')}  coupling={a.get('couplingClass','?')}")
 
     print()
-    print("  Lokal:")
-    local = _pick("Lokale Adapter", locals_, fmt_adapter)
+    print(T("local_label"))
+    local = _pick(T("local_adapters"), locals_, fmt_adapter)
     print()
     if remotes:
-        print("  Remote:")
-        remote = _pick("Remote-Adapter", remotes, fmt_adapter)
+        print(T("remote_label"))
+        remote = _pick(T("remote_adapters"), remotes, fmt_adapter)
     else:
         remote = None
-        print("  ⚠ kein aktiver Remote-Adapter — Spektrum bleibt leer, bis du")
-        print("    einen zweiten FRITZ!Powerline per Pairing-Taste koppelst.")
+        print(T("no_remote"))
     if inactive:
-        print(f"  (ignoriert: {len(inactive)} inaktive Adapter)")
+        print(T("inactive", n=len(inactive)))
     print()
 
-    # ---- 5) Optional settings ----
-    print(" 4) Optionale Einstellungen (Enter = Standard)")
-    port = _prompt("HTTP-Port für das Dashboard", default="8089")
+    # ---- 4) Optional settings ----
+    print(T("step_4"))
+    port = _prompt(T("port_prompt"), default="8089")
     print()
 
-    print("  Ping-Ziel (IP hinter dem Remote-Adapter, misst die Powerline-Latenz).")
+    print(T("ping_hint"))
     neighbors = _arp_neighbors()
     if neighbors:
-        print("  ARP-Nachbarn auf diesem Host:")
+        print(T("arp_neighbors"))
         for n in neighbors[:12]:
             print(f"    • {n}")
-    ping_target = _prompt("Ping-Ziel (leer = deaktiviert)",
-                          default="", allow_empty=True) or None
+    ping_target = _prompt(T("ping_prompt"), default="", allow_empty=True) or None
     print()
 
-    # ---- 6) Summary + confirm ----
-    print(" 5) Zusammenfassung")
-    print(f"    Host:          {host}")
-    print(f"    Passwort:      {password}   ← wird gleich verschlüsselt")
-    print(f"    Lokal-MAC:     {local.get('mac')}")
-    print(f"    Remote-MAC:    {remote.get('mac') if remote else '—'}")
-    print(f"    HTTP-Port:     {port}")
-    print(f"    Ping-Ziel:     {ping_target or '—'}")
+    # ---- 5) Summary + confirm ----
+    print(T("step_5"))
+    print(f"    {T('sum_host'):<13} {host}")
+    print(f"    {T('sum_password'):<13} {password}   {T('sum_password_note')}")
+    print(f"    {T('sum_local'):<13} {local.get('mac')}")
+    print(f"    {T('sum_remote'):<13} {remote.get('mac') if remote else '—'}")
+    print(f"    {T('sum_port'):<13} {port}")
+    print(f"    {T('sum_ping'):<13} {ping_target or '—'}")
     print()
-    if not _yes(_prompt("Speichern? (yes/no)", default="yes")):
-        sys.exit("abgebrochen.")
+    if not _yes(_prompt(T("save_q"), default="yes")):
+        sys.exit(T("aborted"))
 
     cfg = dict(DEFAULT_CONFIG)
     cfg.update({
@@ -1486,6 +1618,7 @@ def setup_wizard():
         "ping_target": ping_target,
         "local_mac": local.get("mac"),
         "remote_mac": remote.get("mac") if remote else None,
+        "language": _LANG,
     })
 
     tmp = CONFIG_PATH + ".tmp"
@@ -1495,33 +1628,32 @@ def setup_wizard():
     os.rename(tmp, CONFIG_PATH)
 
     print()
-    print(f"  ✓ {CONFIG_PATH} gespeichert (chmod 600, Passwort verschlüsselt)")
-    print(f"  ✓ {SECRET_PATH} enthält den Maschinen-Salt (chmod 600, niemals in Git committen)")
+    print(T("saved_config", path=CONFIG_PATH))
+    print(T("saved_secret", path=SECRET_PATH))
     print()
-    print(" Nächste Schritte:")
-    print("    • Test im Vordergrund:          python3 monitor.py")
-    print("    • Als Dienst installieren:      siehe README.md  →  systemd")
-    print(f"    • Dashboard öffnen:             http://<dieser-host>:{port}/")
+    print(T("next_steps"))
+    print(T("next_test"))
+    print(T("next_service"))
+    print(T("next_dashboard", port=port))
     print()
 
 
 def load_config():
+    global _LANG
     with open(CONFIG_PATH) as f:
         raw = json.load(f)
     cfg = {**DEFAULT_CONFIG, **raw}
+    if cfg.get("language") in ("de", "en"):
+        _LANG = cfg["language"]
     if "password" in raw:
-        sys.exit(
-            "config: Klartext-Feld 'password' wird nicht mehr unterstützt — "
-            "bitte python3 monitor.py --setup neu ausführen (hard cutover zu 'password_enc')."
-        )
+        sys.exit(T("err_legacy_pw"))
     enc = cfg.get("password_enc")
     if not enc:
-        sys.exit("config: 'password_enc' fehlt — bitte python3 monitor.py --setup ausführen.")
+        sys.exit(T("err_no_pw"))
     try:
         cfg["password"] = decrypt_password(enc)
     except Exception as e:
-        sys.exit(f"config: Passwort konnte nicht entschlüsselt werden ({e}) — "
-                 f"ggf. .secret verloren? Dann python3 monitor.py --setup erneut ausführen.")
+        sys.exit(T("err_decrypt", err=e))
     return cfg
 
 
