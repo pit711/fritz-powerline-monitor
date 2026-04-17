@@ -1,0 +1,16 @@
+{
+  "host": "fritz.powerline",
+  "password": "REPLACE_ME",
+  "local_mac": null,
+  "remote_mac": null,
+  "poll_seconds": 3,
+  "http_port": 8089,
+  "bind_addr": "0.0.0.0",
+  "live_retention_hours": 25,
+  "arch_retention_days": 30,
+  "arch_bucket_seconds": 300,
+  "rollup_hour": 3,
+  "granularity": 4,
+  "ping_target": null,
+  "ping_timeout_seconds": 2
+}

@@ -1,0 +1,23 @@
+[Unit]
+Description=FRITZ!Powerline spectrum monitor + dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ICMP ping needs CAP_NET_RAW; running as root is the simplest option.
+# To run unprivileged, create a dedicated user and grant the capability:
+#   sudo setcap cap_net_raw+ep $(which ping)
+# then change User= below and chown the install directory accordingly.
+User=root
+WorkingDirectory=/opt/fritz-powerline-monitor
+ExecStart=/usr/bin/python3 /opt/fritz-powerline-monitor/monitor.py
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

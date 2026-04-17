@@ -1,0 +1,1319 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Powerline-Spektrum</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+         background: #0d1117; color: #c9d1d9; }
+
+  header { padding: 12px 20px; background: #161b22; border-bottom: 1px solid #21262d;
+           display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; color: #f0f6fc; white-space: nowrap; }
+  header h1 small { color: #8b949e; font-weight: 400; margin-left: 8px; }
+  .stats { display: flex; gap: 18px; font-size: 13px; color: #8b949e; flex-wrap: wrap;
+           font-variant-numeric: tabular-nums; }
+  .stats b { color: #58a6ff; font-weight: 600; }
+  .stats .rx b { color: #3fb950; }
+  .stats .tx b { color: #f0883e; }
+  .stats .ping b { color: #d2a8ff; }
+  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+           background: #3fb950; margin-right: 6px; vertical-align: middle;
+           animation: pulse 2s infinite; }
+  .pulse.stale { background: #888; animation: none; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(63,185,80,.7); }
+    70% { box-shadow: 0 0 0 8px rgba(63,185,80,0); }
+    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
+  }
+
+  nav.tabs { display: flex; gap: 2px; padding: 0 20px; background: #161b22;
+             border-bottom: 1px solid #21262d; }
+  nav.tabs button { background: transparent; color: #8b949e; border: none;
+                    padding: 10px 18px; cursor: pointer; font: inherit;
+                    border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  nav.tabs button:hover { color: #c9d1d9; }
+  nav.tabs button.active { color: #f0f6fc; border-bottom-color: #58a6ff; }
+
+  main { padding: 16px; display: grid; grid-template-columns: 1fr; gap: 14px;
+         max-width: 1600px; margin: 0 auto; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 6px;
+          padding: 12px 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 12px; color: #8b949e; font-weight: 500;
+             text-transform: uppercase; letter-spacing: .05em;
+             display: flex; gap: 16px; align-items: center; }
+  .card h2 .right { margin-left: auto; font-size: 12px; color: #6e7681;
+                    text-transform: none; letter-spacing: 0; font-weight: 400;
+                    font-variant-numeric: tabular-nums; }
+  canvas { display: block; width: 100%; }
+  .legend { display: flex; gap: 18px; font-size: 12px; margin-top: 8px; color: #8b949e; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 14px; height: 8px; margin-right: 5px;
+              vertical-align: middle; border-radius: 2px; }
+  .err { background: #4d1f1f; color: #ffaaaa; padding: 8px 12px; border-radius: 4px; margin: 8px 18px; }
+  .toggle { display: inline-flex; gap: 1px; background: #21262d; border-radius: 4px; padding: 1px; }
+  .toggle button { background: transparent; color: #8b949e; border: none; font: inherit;
+                   padding: 3px 10px; cursor: pointer; border-radius: 3px; }
+  .toggle button.active { background: #30363d; color: #f0f6fc; }
+
+  .hidden { display: none !important; }
+
+  .colorbar { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #6e7681; }
+  .colorbar .gradient { height: 8px; width: 140px; border-radius: 2px;
+    background: linear-gradient(to right,
+      #1a0030, #3a0050, #5a1075, #7a2090, #c04060, #f06030, #f8b020, #fff080); }
+
+  /* Info tab */
+  .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; }
+  .kv { display: grid; grid-template-columns: 11rem 1fr; gap: 4px 12px; font-size: 13px;
+        font-variant-numeric: tabular-nums; }
+  .kv .k { color: #8b949e; }
+  .kv .v { color: #c9d1d9; }
+  .kv .v.mono { font-family: 'Hack', ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+  .kv .v.dim { color: #6e7681; }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 13px;
+              font-variant-numeric: tabular-nums; }
+  table.tbl th, table.tbl td { padding: 5px 8px; text-align: right; }
+  table.tbl th { color: #8b949e; font-weight: 500; border-bottom: 1px solid #21262d; }
+  table.tbl td { border-bottom: 1px solid #1a1f26; }
+  table.tbl td:first-child, table.tbl th:first-child { text-align: left; color: #8b949e; }
+  table.tbl tbody tr:hover { background: #1a2030; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px;
+          background: #1f2a37; color: #8b949e; }
+  .pill.ok { background: #0d3d22; color: #3fb950; }
+  .pill.warn { background: #3d2e0d; color: #d4a72c; }
+  .pill.err { background: #3d0d1f; color: #f85149; }
+  .explain { font-size: 13px; line-height: 1.55; color: #adbac7; }
+  .explain p { margin: 0 0 8px; }
+  .explain code { background: #21262d; padding: 1px 5px; border-radius: 3px;
+                  font-family: 'Hack', ui-monospace, monospace; font-size: 12px; }
+  .explain ul { margin: 4px 0 8px; padding-left: 22px; }
+  .explain ul li { margin: 2px 0; }
+  .bigval { font-size: 22px; font-weight: 600; color: #f0f6fc; font-variant-numeric: tabular-nums; }
+  .bigval small { font-size: 12px; color: #8b949e; font-weight: 400; margin-left: 4px; }
+  .bignums { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+             gap: 12px 16px; margin: 6px 0 10px; }
+  .bignums .lbl { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: .04em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FRITZ!Powerline<small id="adapterInfo"></small></h1>
+  <div class="stats">
+    <span><span class="pulse" id="pulse"></span><span id="lastTs">–</span></span>
+    <span class="rx">Rx <b id="rxRate">–</b> Mbit/s</span>
+    <span class="tx">Tx <b id="txRate">–</b> Mbit/s</span>
+    <span class="ping">Ping <b id="pingMs">–</b> ms</span>
+    <span>Carrier <b id="carriers">–</b></span>
+    <span>DB <b id="dbSize">–</b></span>
+    <span>Live-Samples <b id="liveCount">–</b></span>
+    <span>Arch-Buckets <b id="archCount">–</b></span>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="live" class="active">Live</button>
+  <button data-tab="day">Tag</button>
+  <button data-tab="week">Woche</button>
+  <button data-tab="month">Monat</button>
+  <button data-tab="info">Info</button>
+</nav>
+
+<div id="errBox"></div>
+
+<main>
+  <!-- ============= LIVE ============= -->
+  <section data-tab="live">
+    <div class="card">
+      <h2>SNR-Spektrum (dB pro OFDM-Träger)
+        <span class="right" id="liveSpecMeta"></span>
+      </h2>
+      <canvas id="liveSpec" height="420"></canvas>
+      <div class="legend">
+        <span><i style="background:#3fb950"></i>Rx Mittel</span>
+        <span><i style="background:rgba(63,185,80,0.18)"></i>Rx Min/Max</span>
+        <span><i style="background:#f0883e"></i>Tx Mittel</span>
+        <span><i style="background:rgba(240,136,62,0.18)"></i>Tx Min/Max</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Wasserfall (rollende SNR-Historie)
+        <div class="toggle" id="liveWfToggle">
+          <button data-dir="rx" class="active">Rx</button>
+          <button data-dir="tx">Tx</button>
+        </div>
+        <span class="right colorbar"><span>0 dB</span><span class="gradient"></span><span>50 dB</span></span>
+      </h2>
+      <canvas id="liveWaterfall" height="380"></canvas>
+      <div class="legend">
+        <span style="color:#6e7681">Neueste oben · 1 Zeile = 1 Sample (~<span id="wfRowSec">3</span> s) · Historie ≈ <span id="wfSpan">–</span></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Datenrate
+        <div class="toggle" id="liveRateToggle">
+          <button data-win="15" class="active">15 min</button>
+          <button data-win="60">1 h</button>
+          <button data-win="1440">24 h</button>
+        </div>
+      </h2>
+      <canvas id="liveRate" height="180"></canvas>
+      <div class="legend">
+        <span><i style="background:#3fb950"></i>Rx</span>
+        <span><i style="background:#f0883e"></i>Tx</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Ping
+        <div class="toggle" id="livePingToggle">
+          <button data-win="15" class="active">15 min</button>
+          <button data-win="60">1 h</button>
+          <button data-win="1440">24 h</button>
+        </div>
+        <span class="right" id="livePingMeta"></span>
+      </h2>
+      <canvas id="livePing" height="160"></canvas>
+      <div class="legend">
+        <span><i style="background:#d2a8ff"></i>Roundtrip nach <span id="livePingTarget">–</span></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= ARCHIV (Tag/Woche/Monat — gleicher Aufbau) ============= -->
+  <section data-tab="archive" class="hidden">
+    <div class="card">
+      <h2>Datenrate
+        <span class="right"><span id="archRangeLabel"></span></span>
+      </h2>
+      <canvas id="archRate" height="200"></canvas>
+      <div class="legend">
+        <span><i style="background:#3fb950"></i>Rx (Mittel)</span>
+        <span><i style="background:rgba(63,185,80,.18)"></i>Rx Min/Max-Band</span>
+        <span><i style="background:#f0883e"></i>Tx (Mittel)</span>
+        <span><i style="background:rgba(240,136,62,.18)"></i>Tx Min/Max-Band</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Ping
+        <span class="right" id="archPingTarget"></span>
+      </h2>
+      <canvas id="archPing" height="180"></canvas>
+      <div class="legend">
+        <span><i style="background:#d2a8ff"></i>Mittel</span>
+        <span><i style="background:rgba(210,168,255,.18)"></i>Min/Max-Band</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Wasserfall (Frequenz × Zeit, neueste oben)
+        <div class="toggle" id="heatDirToggle">
+          <button data-dir="rx" class="active">Rx</button>
+          <button data-dir="tx">Tx</button>
+        </div>
+        <span class="right colorbar"><span>0 dB</span><span class="gradient"></span><span>50 dB</span></span>
+      </h2>
+      <canvas id="archHeat" height="500"></canvas>
+      <div class="legend">
+        <span style="color:#6e7681">Klicke in den Wasserfall, um Spektrum-Snapshot zum gewählten Zeitpunkt zu laden →</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Spektrum-Snapshot
+        <span class="right" id="snapMeta">– zum Anzeigen in Heatmap klicken –</span>
+      </h2>
+      <canvas id="archSnap" height="320"></canvas>
+      <div class="legend">
+        <span><i style="background:#3fb950"></i>Rx Mittel</span>
+        <span><i style="background:rgba(63,185,80,.18)"></i>Rx Min/Max</span>
+        <span><i style="background:#f0883e"></i>Tx Mittel</span>
+        <span><i style="background:rgba(240,136,62,.18)"></i>Tx Min/Max</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============= INFO ============= -->
+  <section data-tab="info" class="hidden">
+    <div class="card">
+      <h2>Live-Übersicht
+        <span class="right" id="infoLiveTs">–</span>
+      </h2>
+      <div class="bignums" id="infoBignums"></div>
+    </div>
+
+    <div class="info-grid">
+      <div class="card">
+        <h2>Powerline-Adapter</h2>
+        <div id="infoAdapters"></div>
+      </div>
+      <div class="card">
+        <h2>Spektrum-Eigenschaften</h2>
+        <div class="kv" id="infoSpectrum"></div>
+      </div>
+      <div class="card">
+        <h2>Datenrate über Zeit (Rx)</h2>
+        <table class="tbl"><thead><tr>
+          <th>Fenster</th><th>Ø Mbit/s</th><th>Min</th><th>Max</th><th>Samples</th>
+        </tr></thead><tbody id="infoRates"></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Datenrate über Zeit (Tx)</h2>
+        <table class="tbl"><thead><tr>
+          <th>Fenster</th><th>Ø Mbit/s</th><th>Min</th><th>Max</th><th>Samples</th>
+        </tr></thead><tbody id="infoTxRates"></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Ping über Zeit
+          <span class="right" id="infoPingTarget"></span>
+        </h2>
+        <table class="tbl"><thead><tr>
+          <th>Fenster</th><th>Ø ms</th><th>Min</th><th>Max</th><th>Samples</th>
+        </tr></thead><tbody id="infoPings"></tbody></table>
+      </div>
+      <div class="card">
+        <h2>Service & Datenbank</h2>
+        <div class="kv" id="infoService"></div>
+      </div>
+      <div class="card" style="grid-column: 1 / -1;">
+        <h2>Notches & Amateurfunk-Bänder
+          <span class="right" style="color:#6e7681">aus aktueller Messung erkannt</span>
+        </h2>
+        <table class="tbl"><thead><tr>
+          <th>Band</th><th>Bereich (MHz)</th><th>Träger im Band</th>
+          <th>RX gesperrt</th><th>TX gesperrt</th><th>Status</th>
+        </tr></thead><tbody id="infoNotches"></tbody></table>
+      </div>
+      <div class="card" style="grid-column: 1 / -1;">
+        <h2>Wie funktioniert HomePlug AV2?</h2>
+        <div class="explain">
+          <p><b>Übertragung über das Stromnetz:</b> Der Chip nutzt 230-V-Hausverkabelung als Übertragungsmedium und legt dort hochfrequente OFDM-Signale (1.8–67 MHz) auf. Die AC-Mains koppelt diese über parasitäre Kapazitäten zwischen den Adern weiter — der Chip sieht typischerweise <b>2690 Träger</b> im Bereich, aufgeteilt in <code>granularity</code>-Schritte (hier <code>g=4</code> → <span id="explainCarriers">672</span> sichtbare Carrier-Bins, je <span id="explainStep">~98 kHz</span> breit).</p>
+          <p><b>Adaptives Bitloading:</b> Pro Träger schätzt das Modem das SNR und entscheidet, wieviele Bits es pro Symbol moduliert (BPSK = 1 Bit, QPSK = 2, 16-QAM = 4, …, 4096-QAM = 12 Bits). Saubere Träger (z.B. 30 dB+) bekommen 1024-QAM, verrauschte werden ganz abgeschaltet. Diese „Tone Map" wird etwa <b>alle 3 Sekunden neu berechnet</b> — genau die Frequenz, mit der wir abfragen.</p>
+          <p><b>Slot-Synchronisation mit dem Netz:</b> Die <code>RxSlotMask</code> / <code>TxSlotMask</code> in unseren Daten beziehen sich auf <b>6 Zeitschlitze pro AC-Halbwelle</b> (50 Hz × 2 Halbwellen × 6 Slots = 600 Zeitschlitze pro Sekunde). Manche Schlitze sind durch Schaltnetzteile, Dimmer oder andere Geräte chronisch verrauscht — der Chip schaltet sie selektiv ab. Hier siehst du gerade <b><span id="explainRxSlots">–</span> RX-Slots</b> und <b><span id="explainTxSlots">–</span> TX-Slots</b> aktiv von 6 möglichen.</p>
+          <p><b>Permanent-Notches (regulatorisch):</b> Damit Powerline keine Amateurfunk-Empfänger stört, schreibt die BNetzA (in DE über die Verfügung 6/2017 / IEC 61000-3-8 / EN 50561-1) <b>permanent leere Bereiche</b> in den Amateurbändern vor. Das siehst du als schwarze Streifen in den gelb markierten Bändern im Wasserfall — und in der Tabelle oben mit „RX gesperrt = 100 %".</p>
+          <p><b>Verschlüsselung:</b> Alle Pakete werden per 128-bit AES verschlüsselt; die Adapter handeln den Schlüssel beim Pairing (Knopfdruck oder via FRITZ!Box-Master) aus. Ein Nachbar in derselben Stromphase kann das Signal hören, aber nicht entschlüsseln.</p>
+          <p><b>Brutto vs. netto:</b> „Geschwindigkeitsklasse 500" bedeutet 500 Mbit/s als theoretischer PHY-Brutto-Wert über alle Slots & Träger. Real liegen die <code>RxPhyRate</code> / <code>TxPhyRate</code> deutlich darunter (typisch 30–150 Mbit/s), denn (a) nicht alle Träger sind nutzbar, (b) MAC-Overhead frisst ~20 %, (c) Halbduplex teilt Bandbreite auf RX & TX.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// ============================================================================
+// helpers
+// ============================================================================
+const $  = id => document.getElementById(id);
+const $$ = sel => document.querySelectorAll(sel);
+
+function dpr() { return window.devicePixelRatio || 1; }
+function setupCanvas(c) {
+  const r = dpr();
+  const w = c.clientWidth || c.parentElement.clientWidth;
+  const h = parseInt(c.getAttribute("height"), 10);
+  c.style.height = h + "px";
+  c.width  = Math.max(1, Math.floor(w * r));
+  c.height = Math.max(1, Math.floor(h * r));
+  const ctx = c.getContext("2d");
+  ctx.setTransform(r, 0, 0, r, 0, 0);
+  return { ctx, w, h };
+}
+function popcount(n){let c=0;while(n){c+=n&1;n>>>=1;}return c||1;}
+function carrierFreqMHz(idx, g) { return (idx * g + 74) / 40.96; }
+function fmtBytes(b){if(!b)return "0";const u=["B","K","M","G"];let i=0;let v=b;
+  while(v>=1024&&i<3){v/=1024;i++;}return v.toFixed(v<10?1:0)+u[i];}
+function fmtTime(ts, withDate){
+  const d=new Date(ts*1000);
+  const t=d.getHours().toString().padStart(2,"0")+":"+d.getMinutes().toString().padStart(2,"0");
+  if(!withDate)return t;
+  return d.getDate().toString().padStart(2,"0")+"."+(d.getMonth()+1).toString().padStart(2,"0")+" "+t;
+}
+
+// raw → dB scaling matches AVM webui
+function scaleArr(raw, granularity, divider) {
+  if (!raw) return null;
+  const out = new Float32Array(raw.length);
+  const f = 1 / (granularity * divider * 4);
+  for (let i = 0; i < raw.length; i++) out[i] = raw[i] * f;
+  return out;
+}
+
+// Amateurfunk-Bänder im HomePlug-Bereich (1.8–68 MHz)
+const HAM_BANDS = [
+  { name: "160m", lo: 1.810, hi: 2.000 },
+  { name: "80m",  lo: 3.500, hi: 3.800 },
+  { name: "60m",  lo: 5.351, hi: 5.366 },
+  { name: "40m",  lo: 7.000, hi: 7.200 },
+  { name: "30m",  lo: 10.100, hi: 10.150 },
+  { name: "20m",  lo: 14.000, hi: 14.350 },
+  { name: "17m",  lo: 18.068, hi: 18.168 },
+  { name: "15m",  lo: 21.000, hi: 21.450 },
+  { name: "12m",  lo: 24.890, hi: 24.990 },
+  { name: "10m",  lo: 28.000, hi: 29.700 },
+  { name: "6m",   lo: 50.000, hi: 52.000 },
+];
+
+function drawHamBands(ctx, padL, padT, innerW, innerH, fMin, fMax) {
+  ctx.save();
+  ctx.font = "10px system-ui";
+  for (const b of HAM_BANDS) {
+    if (b.hi < fMin || b.lo > fMax) continue;
+    const lo = Math.max(b.lo, fMin);
+    const hi = Math.min(b.hi, fMax);
+    const x0 = padL + innerW * (lo - fMin) / (fMax - fMin);
+    const x1 = padL + innerW * (hi - fMin) / (fMax - fMin);
+    const ww = Math.max(1, x1 - x0);
+    // subtle yellow fill across full plot height
+    ctx.fillStyle = "rgba(255,220,100,0.10)";
+    ctx.fillRect(x0, padT, ww, innerH);
+    // tiny tick marks at top + bottom edges of plot
+    ctx.fillStyle = "rgba(255,220,100,0.55)";
+    ctx.fillRect(x0, padT, ww, 2);
+    ctx.fillRect(x0, padT + innerH - 2, ww, 2);
+    // label centered above band, with dark backing
+    const cx = (x0 + x1) / 2;
+    const lbl = b.name;
+    const tw = ctx.measureText(lbl).width;
+    ctx.fillStyle = "rgba(13,17,23,0.85)";
+    ctx.fillRect(Math.round(cx - tw/2 - 3), padT + 1, tw + 6, 12);
+    ctx.fillStyle = "#ffd864";
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(lbl, cx, padT + 2);
+  }
+  ctx.restore();
+}
+
+// viridis-ish 8-stop colormap → returns [r,g,b]
+const CMAP = [
+  [0.10, [26, 0, 48]],
+  [0.18, [58, 0, 80]],
+  [0.30, [90, 16,117]],
+  [0.45, [122, 32,144]],
+  [0.60, [192, 64, 96]],
+  [0.75, [240, 96, 48]],
+  [0.88, [248,176, 32]],
+  [1.00, [255,240,128]],
+];
+function color(v01) {
+  v01 = Math.max(0, Math.min(1, v01));
+  for (let i=1; i<CMAP.length; i++) {
+    if (v01 <= CMAP[i][0]) {
+      const a=CMAP[i-1], b=CMAP[i];
+      const t=(v01-a[0])/(b[0]-a[0]);
+      return [
+        Math.round(a[1][0] + t*(b[1][0]-a[1][0])),
+        Math.round(a[1][1] + t*(b[1][1]-a[1][1])),
+        Math.round(a[1][2] + t*(b[1][2]-a[1][2])),
+      ];
+    }
+  }
+  return CMAP[CMAP.length-1][1];
+}
+
+// ============================================================================
+// generic chart helpers
+// ============================================================================
+function clearBg(ctx, w, h){ ctx.fillStyle="#161b22"; ctx.fillRect(0,0,w,h); }
+function drawAxes(ctx, padL, padT, innerW, innerH, w, maxY, yLabel, xTicks){
+  ctx.strokeStyle = "#21262d"; ctx.lineWidth = 1;
+  ctx.fillStyle = "#8b949e"; ctx.font = "11px system-ui";
+  for (let i=0; i<=5; i++){
+    const yy = padT + innerH * i/5;
+    ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(w - 14, yy); ctx.stroke();
+    ctx.textAlign="right"; ctx.textBaseline="middle";
+    ctx.fillText(Math.round(maxY*(1-i/5)) + (yLabel||""), padL-6, yy);
+  }
+  for (const xt of xTicks){
+    const x = padL + innerW * xt.r;
+    ctx.strokeStyle = "#21262d";
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT+innerH); ctx.stroke();
+    ctx.textAlign="center"; ctx.textBaseline="top";
+    ctx.fillText(xt.label, x, padT+innerH+6);
+  }
+  ctx.strokeStyle="#30363d"; ctx.strokeRect(padL, padT, innerW, innerH);
+}
+
+// ============================================================================
+// LIVE: spectrum line + rolling rate
+// ============================================================================
+let liveLatest = null;
+const liveRateBuffer = []; // {ts, rx, tx, ping} — rolling ~1h
+let liveRateWindow = 15;   // minutes (15 or 60)
+let livePingWindow = 15;
+
+function drawLiveSpectrum(d) {
+  const c = $("liveSpec");
+  const { ctx, w, h } = setupCanvas(c);
+  clearBg(ctx, w, h);
+  const padL=52, padR=14, padT=10, padB=32;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+
+  if (!d || !d.rx_mean) {
+    ctx.fillStyle="#8b949e"; ctx.font="13px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("Verbinde mit Live-Stream…", w/2, h/2);
+    return;
+  }
+  const g = d.granularity || 4;
+  const rxDiv = popcount(d.rx_slot_mask || 1);
+  const txDiv = popcount(d.tx_slot_mask || 1);
+  const rxMin=scaleArr(d.rx_min,g,1), rxMax=scaleArr(d.rx_max,g,1), rxAvg=scaleArr(d.rx_mean,g,rxDiv);
+  const txMin=scaleArr(d.tx_min,g,1), txMax=scaleArr(d.tx_max,g,1), txAvg=scaleArr(d.tx_mean,g,txDiv);
+
+  let maxY=10;
+  for (const a of [rxMin,rxMax,rxAvg,txMin,txMax,txAvg]) if (a) for (let i=0;i<a.length;i++) if (a[i]>maxY) maxY=a[i];
+  maxY = Math.ceil(maxY/5)*5;
+
+  const N = (rxAvg||txAvg).length;
+  const fMin=carrierFreqMHz(0,g), fMax=carrierFreqMHz(N-1,g);
+  const xTicks = [];
+  const tickStep = (fMax-fMin) > 50 ? 10 : 5;
+  for (let f=Math.ceil(fMin/tickStep)*tickStep; f<=fMax; f+=tickStep)
+    xTicks.push({ r:(f-fMin)/(fMax-fMin), label:f+" MHz" });
+  drawAxes(ctx, padL, padT, innerW, innerH, w, maxY, " dB", xTicks);
+
+  function drawDir(min,max,avg, fill, stroke){
+    const xOf = i => padL + innerW * i/(N-1);
+    const yOf = v => padT + innerH * (1 - Math.max(0,Math.min(maxY,v))/maxY);
+    if (min && max){
+      ctx.beginPath(); ctx.moveTo(xOf(0), yOf(max[0]));
+      for (let i=1;i<N;i++) ctx.lineTo(xOf(i), yOf(max[i]));
+      for (let i=N-1;i>=0;i--) ctx.lineTo(xOf(i), yOf(min[i]));
+      ctx.closePath(); ctx.fillStyle=fill; ctx.fill();
+    }
+    if (avg){
+      ctx.beginPath(); ctx.moveTo(xOf(0), yOf(avg[0]));
+      for (let i=1;i<N;i++) ctx.lineTo(xOf(i), yOf(avg[i]));
+      ctx.strokeStyle=stroke; ctx.lineWidth=1.3; ctx.stroke();
+    }
+  }
+  drawDir(rxMin,rxMax,rxAvg, "rgba(63,185,80,.18)", "#3fb950");
+  drawDir(txMin,txMax,txAvg, "rgba(240,136,62,.18)", "#f0883e");
+  drawHamBands(ctx, padL, padT, innerW, innerH, fMin, fMax);
+
+  $("liveSpecMeta").textContent =
+    `${N} Träger · ${fMin.toFixed(1)}–${fMax.toFixed(1)} MHz · g=${g}`;
+}
+
+function drawLiveRate() {
+  const c = $("liveRate");
+  const { ctx, w, h } = setupCanvas(c);
+  clearBg(ctx, w, h);
+  const padL=52, padR=14, padT=10, padB=24;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  if (liveRateBuffer.length < 2){
+    ctx.fillStyle="#8b949e"; ctx.font="12px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("Sammle Live-Daten…", w/2, h/2);
+    return;
+  }
+  const t1 = liveRateBuffer[liveRateBuffer.length-1].ts;
+  const t0 = t1 - liveRateWindow*60;
+  const visible = liveRateBuffer.filter(s => s.ts >= t0);
+  const span = Math.max(1, t1 - t0);
+  let maxY=10;
+  for (const s of visible) maxY=Math.max(maxY, s.rx||0, s.tx||0);
+  maxY = Math.ceil(maxY/50)*50;
+  const xTicks = [];
+  const labels = liveRateWindow >= 60 ? 6 : 5;
+  const useDate = liveRateWindow >= 1440;
+  for (let i=0;i<=labels;i++){
+    const t = t0 + span*i/labels;
+    xTicks.push({ r:i/labels, label: fmtTime(t, useDate) });
+  }
+  drawAxes(ctx, padL, padT, innerW, innerH, w, maxY, "", xTicks);
+
+  function line(key, color){
+    ctx.beginPath();
+    let started=false;
+    for (const s of visible){
+      const v = s[key]; if (v==null) continue;
+      const x = padL + innerW*(s.ts - t0)/span;
+      const y = padT + innerH*(1 - v/maxY);
+      if (!started){ ctx.moveTo(x,y); started=true; } else ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.stroke();
+  }
+  line("rx", "#3fb950"); line("tx", "#f0883e");
+}
+
+function drawLivePing() {
+  const c = $("livePing");
+  const { ctx, w, h } = setupCanvas(c);
+  clearBg(ctx, w, h);
+  const padL=52, padR=14, padT=10, padB=24;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  const allPings = liveRateBuffer.filter(s => s.ping != null);
+  if (allPings.length < 2){
+    ctx.fillStyle="#8b949e"; ctx.font="12px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(allPings.length===0 ? "Noch keine Ping-Daten…" : "Sammle Ping-Daten…", w/2, h/2);
+    return;
+  }
+  const t1 = liveRateBuffer[liveRateBuffer.length-1].ts;
+  const t0 = t1 - livePingWindow*60;
+  const visible = allPings.filter(s => s.ts >= t0);
+  const span = Math.max(1, t1 - t0);
+  let maxY=10;
+  for (const s of visible) maxY=Math.max(maxY, s.ping);
+  const step = maxY < 20 ? 5 : (maxY < 100 ? 10 : (maxY < 500 ? 50 : 100));
+  maxY = Math.ceil(maxY / step) * step;
+
+  const xTicks=[];
+  const labels = livePingWindow >= 60 ? 6 : 5;
+  const useDate = livePingWindow >= 1440;
+  for (let i=0;i<=labels;i++){
+    const t = t0 + span*i/labels;
+    xTicks.push({ r:i/labels, label: fmtTime(t, useDate) });
+  }
+  drawAxes(ctx, padL, padT, innerW, innerH, w, maxY, " ms", xTicks);
+
+  ctx.beginPath();
+  let started=false;
+  for (const s of visible){
+    const x = padL + innerW*(s.ts - t0)/span;
+    const y = padT + innerH*(1 - Math.min(maxY, s.ping)/maxY);
+    if (!started){ ctx.moveTo(x,y); started=true; } else ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle="#d2a8ff"; ctx.lineWidth=1.5; ctx.stroke();
+
+  // Stats footer (over visible window)
+  if (visible.length){
+    const last = visible[visible.length-1].ping;
+    const minV = Math.min(...visible.map(s=>s.ping));
+    const maxV = Math.max(...visible.map(s=>s.ping));
+    const avgV = visible.reduce((a,s)=>a+s.ping,0) / visible.length;
+    $("livePingMeta").textContent =
+      `aktuell ${last.toFixed(1)} ms · Ø ${avgV.toFixed(1)} · Min ${minV.toFixed(1)} · Max ${maxV.toFixed(1)}`;
+  }
+}
+
+// ---- Waterfall (SDR-style) -------------------------------------------------
+const WF_HISTORY = 400;
+const wfBuf = { rx: document.createElement("canvas"), tx: document.createElement("canvas") };
+let wfReady = false, wfDir = "rx", wfRowSec = 3;
+
+function ensureWfBuffers(N) {
+  if (wfReady && wfBuf.rx.width === N) return;
+  for (const dir of ["rx","tx"]){
+    const c = wfBuf[dir];
+    c.width = N; c.height = WF_HISTORY;
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = "#161b22"; ctx.fillRect(0, 0, N, WF_HISTORY);
+  }
+  wfReady = true;
+}
+
+// Push one row (already in dB) into both rx/tx buffers.
+function pushWfRowDb(arrRx, arrTx) {
+  const N = (arrRx && arrRx.length) || (arrTx && arrTx.length) || 0;
+  if (!N) return;
+  ensureWfBuffers(N);
+  const MAX_DB = 50;
+  for (const dir of ["rx","tx"]){
+    const arr = (dir==="rx") ? arrRx : arrTx;
+    const c = wfBuf[dir];
+    const ctx = c.getContext("2d");
+    // shift contents down by 1 row (drops bottom row)
+    ctx.drawImage(c, 0, 0, N, WF_HISTORY - 1, 0, 1, N, WF_HISTORY - 1);
+    if (arr){
+      const img = ctx.createImageData(N, 1);
+      for (let x = 0; x < N; x++){
+        const v = arr[x] || 0;
+        const t = Math.max(0, Math.min(1, v / MAX_DB));
+        const [r,g,b] = color(t);
+        img.data[x*4+0]=r; img.data[x*4+1]=g; img.data[x*4+2]=b; img.data[x*4+3]=255;
+      }
+      ctx.putImageData(img, 0, 0);
+    } else {
+      // null row → keep dark
+      const img = ctx.createImageData(N, 1);
+      for (let x=0; x<N; x++){ img.data[x*4+3]=255; }
+      ctx.putImageData(img, 0, 0);
+    }
+  }
+}
+
+function pushWfRowFromSample(d) {
+  const g = d.granularity || 4;
+  const rx = scaleArr(d.rx_mean, g, popcount(d.rx_slot_mask||1));
+  const tx = scaleArr(d.tx_mean, g, popcount(d.tx_slot_mask||1));
+  pushWfRowDb(rx, tx);
+}
+
+function drawWaterfall() {
+  const c = $("liveWaterfall");
+  const { ctx, w, h } = setupCanvas(c);
+  clearBg(ctx, w, h);
+  const padL=52, padR=14, padT=10, padB=28;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  if (!wfReady){
+    ctx.fillStyle="#8b949e"; ctx.font="12px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("Sammle Wasserfall-Daten…", w/2, h/2);
+    return;
+  }
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(wfBuf[wfDir], padL, padT, innerW, innerH);
+
+  // Frequency ticks (top axis), draw above the heatmap area
+  const N = wfBuf[wfDir].width;
+  const g = (liveLatest && liveLatest.granularity) || 4;
+  const fMin = carrierFreqMHz(0, g), fMax = carrierFreqMHz(N-1, g);
+  ctx.fillStyle="#8b949e"; ctx.font="11px system-ui";
+  ctx.strokeStyle="#21262d";
+  const fStep = (fMax-fMin) > 50 ? 10 : 5;
+  for (let f=Math.ceil(fMin/fStep)*fStep; f<=fMax; f+=fStep){
+    const x = padL + innerW * (f-fMin)/(fMax-fMin);
+    ctx.beginPath(); ctx.moveTo(x, padT+innerH); ctx.lineTo(x, padT+innerH+3); ctx.stroke();
+    ctx.textAlign="center"; ctx.textBaseline="top";
+    ctx.fillText(f+" MHz", x, padT+innerH+6);
+  }
+
+  // Time axis on the LEFT (newest at top → 0, oldest at bottom)
+  const totalSec = WF_HISTORY * wfRowSec;
+  const tickEvery = totalSec >= 600 ? 300 : (totalSec >= 120 ? 60 : 30);
+  for (let s=0; s<=totalSec; s+=tickEvery){
+    const yy = padT + innerH * (s/totalSec);
+    ctx.beginPath(); ctx.moveTo(padL-3, yy); ctx.lineTo(padL, yy); ctx.stroke();
+    ctx.textAlign="right"; ctx.textBaseline="middle";
+    const lbl = s===0 ? "jetzt" :
+                (s>=60 ? `-${Math.round(s/60)} min` : `-${s} s`);
+    ctx.fillText(lbl, padL-6, yy);
+  }
+  ctx.strokeStyle="#30363d"; ctx.strokeRect(padL, padT, innerW, innerH);
+  drawHamBands(ctx, padL, padT, innerW, innerH, fMin, fMax);
+
+  // Update legend duration
+  const span = totalSec>=60 ? Math.round(totalSec/60)+" min" : totalSec+" s";
+  $("wfSpan").textContent = span;
+  $("wfRowSec").textContent = wfRowSec;
+}
+
+$$("#liveWfToggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    wfDir = b.dataset.dir;
+    $$("#liveWfToggle button").forEach(x => x.classList.toggle("active", x===b));
+    drawWaterfall();
+  });
+});
+
+$$("#liveRateToggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    liveRateWindow = parseInt(b.dataset.win, 10);
+    $$("#liveRateToggle button").forEach(x => x.classList.toggle("active", x===b));
+    drawLiveRate();
+  });
+});
+$$("#livePingToggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    livePingWindow = parseInt(b.dataset.win, 10);
+    $$("#livePingToggle button").forEach(x => x.classList.toggle("active", x===b));
+    drawLivePing();
+  });
+});
+
+async function prefillLiveBuffers() {
+  try {
+    const now = Math.floor(Date.now()/1000);
+    const data = await fetch(
+      `/api/range?from=${now-24*3600}&to=${now}&max_buckets=600&include_spectrum=0`
+    ).then(r=>r.json());
+    if (data.empty || !data.phy) return;
+    // Replace any existing pre-fill (in case this runs more than once)
+    liveRateBuffer.length = 0;
+    for (const p of data.phy) {
+      liveRateBuffer.push({
+        ts: p.ts,
+        rx: p.rx_avg, tx: p.tx_avg, ping: p.ping_avg,
+      });
+    }
+    if (currentTab === "live"){ drawLiveRate(); drawLivePing(); }
+  } catch(e) { /* ignore */ }
+}
+
+async function prefillWaterfall() {
+  try {
+    const info = await fetch("/api/info").then(r=>r.json());
+    if (info.poll_seconds) wfRowSec = info.poll_seconds;
+    const now = Math.floor(Date.now()/1000);
+    const span = WF_HISTORY * wfRowSec;
+    const data = await fetch(`/api/range?from=${now-span}&to=${now}&max_buckets=${WF_HISTORY}`).then(r=>r.json());
+    if (data.empty) { drawWaterfall(); return; }
+    const rx = data.rx_heat || [], tx = data.tx_heat || [];
+    for (let i=0; i<rx.length; i++) pushWfRowDb(rx[i], tx[i]);
+    if (currentTab === "live") drawWaterfall();
+  } catch(e) { /* ignore */ }
+}
+
+// ---- SSE ------------------------------------------------------------------
+let evtSrc = null;
+let staleTimer = null;
+function startLive() {
+  if (evtSrc) return;
+  evtSrc = new EventSource("/api/live");
+  evtSrc.onmessage = ev => {
+    let d; try { d = JSON.parse(ev.data); } catch { return; }
+    if (d.type !== "sample") return;
+    liveLatest = d;
+    $("pulse").classList.remove("stale");
+    $("lastTs").textContent = fmtTime(d.ts, false);
+    $("rxRate").textContent = d.rx_phy ?? "–";
+    $("txRate").textContent = d.tx_phy ?? "–";
+    $("carriers").textContent = d.carrier_count ?? "–";
+    $("pingMs").textContent = d.ping_ms != null ? d.ping_ms.toFixed(1) : "–";
+    // dedupe vs. pre-filled history if SSE timestamp matches
+    const prev = liveRateBuffer[liveRateBuffer.length-1];
+    if (!prev || prev.ts < d.ts) {
+      liveRateBuffer.push({ ts: d.ts, rx: d.rx_phy, tx: d.tx_phy, ping: d.ping_ms });
+    }
+    const cutoff = Date.now()/1000 - 25*3600;
+    while (liveRateBuffer.length && liveRateBuffer[0].ts < cutoff) liveRateBuffer.shift();
+    pushWfRowFromSample(d);
+    if (currentTab === "live"){
+      drawLiveSpectrum(d);
+      drawLiveRate();
+      drawLivePing();
+      drawWaterfall();
+    }
+    clearTimeout(staleTimer);
+    staleTimer = setTimeout(()=>$("pulse").classList.add("stale"), 12000);
+  };
+  evtSrc.onerror = () => {
+    $("pulse").classList.add("stale");
+  };
+}
+
+// ============================================================================
+// ARCHIVE: rate chart + heatmap + click→snapshot
+// ============================================================================
+let archData = null;
+let heatDir = "rx";  // "rx" or "tx"
+let archGeom = null;  // {padL, padT, innerW, innerH, t0, t1, n}
+
+function drawArchPing(data) {
+  const c = $("archPing");
+  const { ctx, w, h } = setupCanvas(c);
+  clearBg(ctx, w, h);
+  const padL=52, padR=14, padT=10, padB=26;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  if (!data || !data.phy || !data.phy.length){
+    ctx.fillStyle="#8b949e"; ctx.font="12px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("Keine Daten im Bereich.", w/2, h/2); return;
+  }
+  const phy = data.phy.filter(p => p.ping_avg != null);
+  if (!phy.length){
+    ctx.fillStyle="#8b949e"; ctx.font="12px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("Keine Ping-Daten im Bereich.", w/2, h/2); return;
+  }
+  const t0 = phy[0].ts, t1 = phy[phy.length-1].ts;
+  const span = Math.max(1, t1 - t0);
+  let maxY=10;
+  for (const p of phy) maxY = Math.max(maxY, p.ping_max ?? p.ping_avg ?? 0);
+  const step = maxY < 20 ? 5 : (maxY < 100 ? 10 : (maxY < 500 ? 50 : 100));
+  maxY = Math.ceil(maxY / step) * step;
+
+  const xTicks = [];
+  const useDate = span > 86400;
+  const N = 6;
+  for (let i=0;i<=N;i++){
+    const t = t0 + span*i/N;
+    xTicks.push({ r:i/N, label: fmtTime(t, useDate) });
+  }
+  drawAxes(ctx, padL, padT, innerW, innerH, w, maxY, " ms", xTicks);
+
+  const xOf = ts => padL + innerW*(ts - t0)/span;
+  const yOf = v  => padT + innerH*(1 - Math.min(maxY, v)/maxY);
+
+  // Min/Max band
+  ctx.beginPath();
+  let started=false;
+  for (const p of phy){
+    const v = p.ping_max; if (v==null) continue;
+    if (!started){ ctx.moveTo(xOf(p.ts), yOf(v)); started=true; } else ctx.lineTo(xOf(p.ts), yOf(v));
+  }
+  for (let i=phy.length-1; i>=0; i--){
+    const v = phy[i].ping_min; if (v==null) continue;
+    ctx.lineTo(xOf(phy[i].ts), yOf(v));
+  }
+  ctx.closePath(); ctx.fillStyle="rgba(210,168,255,.18)"; ctx.fill();
+
+  // Avg line
+  ctx.beginPath(); started=false;
+  for (const p of phy){
+    const v = p.ping_avg; if (v==null) continue;
+    if (!started){ ctx.moveTo(xOf(p.ts), yOf(v)); started=true; } else ctx.lineTo(xOf(p.ts), yOf(v));
+  }
+  ctx.strokeStyle="#d2a8ff"; ctx.lineWidth=1.4; ctx.stroke();
+}
+
+function drawArchRate(data) {
+  const c = $("archRate");
+  const { ctx, w, h } = setupCanvas(c);
+  clearBg(ctx, w, h);
+  const padL=52, padR=14, padT=10, padB=26;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  if (!data || !data.phy || !data.phy.length){
+    ctx.fillStyle="#8b949e"; ctx.font="12px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("Keine Daten im Bereich.", w/2, h/2); return;
+  }
+  const phy = data.phy;
+  const t0 = phy[0].ts, t1 = phy[phy.length-1].ts;
+  const span = Math.max(1, t1 - t0);
+  let maxY=10;
+  for (const p of phy) maxY = Math.max(maxY, p.rx_max||0, p.tx_max||0, p.rx_avg||0, p.tx_avg||0);
+  maxY = Math.ceil(maxY/50)*50;
+  const xTicks = [];
+  const useDate = span > 86400;
+  const N = 6;
+  for (let i=0;i<=N;i++){
+    const t = t0 + span*i/N;
+    xTicks.push({ r:i/N, label: fmtTime(t, useDate) });
+  }
+  drawAxes(ctx, padL, padT, innerW, innerH, w, maxY, "", xTicks);
+
+  const xOf = ts => padL + innerW*(ts - t0)/span;
+  const yOf = v  => padT + innerH*(1 - v/maxY);
+
+  function band(loKey, hiKey, fill){
+    ctx.beginPath();
+    let started=false;
+    for (const p of phy){
+      const v = p[hiKey]; if (v==null) continue;
+      if (!started){ ctx.moveTo(xOf(p.ts), yOf(v)); started=true; } else ctx.lineTo(xOf(p.ts), yOf(v));
+    }
+    for (let i=phy.length-1; i>=0; i--){
+      const v = phy[i][loKey]; if (v==null) continue;
+      ctx.lineTo(xOf(phy[i].ts), yOf(v));
+    }
+    ctx.closePath(); ctx.fillStyle=fill; ctx.fill();
+  }
+  function line(key, color){
+    ctx.beginPath();
+    let started=false;
+    for (const p of phy){
+      const v = p[key]; if (v==null) continue;
+      if (!started){ ctx.moveTo(xOf(p.ts), yOf(v)); started=true; } else ctx.lineTo(xOf(p.ts), yOf(v));
+    }
+    ctx.strokeStyle=color; ctx.lineWidth=1.4; ctx.stroke();
+  }
+  band("rx_min","rx_max","rgba(63,185,80,.18)");
+  band("tx_min","tx_max","rgba(240,136,62,.18)");
+  line("rx_avg","#3fb950");
+  line("tx_avg","#f0883e");
+}
+
+function drawHeat(data) {
+  const c = $("archHeat");
+  const { ctx, w, h } = setupCanvas(c);
+  clearBg(ctx, w, h);
+  const padL=64, padR=14, padT=10, padB=28;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  if (!data || !data.phy || !data.phy.length){
+    ctx.fillStyle="#8b949e"; ctx.font="12px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("Keine Daten im Bereich.", w/2, h/2); archGeom=null; return;
+  }
+  const phy = data.phy;
+  const heatRows = (heatDir==="rx") ? data.rx_heat : data.tx_heat;
+  const t0 = phy[0].ts, t1 = phy[phy.length-1].ts;
+  const span = Math.max(1, t1 - t0);
+  const N = data.carrier_count;
+  const fMin = data.freq_min_mhz, fMax = data.freq_max_mhz;
+
+  // SDR-style waterfall: cols=carriers (X=freq), rows=time buckets (Y=time, newest on top)
+  const cols = N, rows = phy.length;
+  const img = ctx.createImageData(cols, rows);
+  const MAX_DB = 50;
+  for (let r=0; r<rows; r++){
+    const srcIdx = rows - 1 - r;  // newest at top
+    const row = heatRows[srcIdx];
+    if (!row){
+      for (let cc=0; cc<cols; cc++){
+        const off = (r*cols + cc) * 4;
+        img.data[off+0]=22; img.data[off+1]=27; img.data[off+2]=34; img.data[off+3]=255;
+      }
+      continue;
+    }
+    for (let cc=0; cc<cols; cc++){
+      const v = row[cc] || 0;
+      const t = Math.max(0, Math.min(1, v / MAX_DB));
+      const [R,G,B] = color(t);
+      const off = (r*cols + cc) * 4;
+      img.data[off+0]=R; img.data[off+1]=G; img.data[off+2]=B; img.data[off+3]=255;
+    }
+  }
+  const tmp = document.createElement("canvas");
+  tmp.width = cols; tmp.height = rows;
+  tmp.getContext("2d").putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, padL, padT, innerW, innerH);
+
+  // Frequency axis (bottom)
+  ctx.fillStyle="#8b949e"; ctx.font="11px system-ui";
+  ctx.strokeStyle="#21262d";
+  const fStep = (fMax-fMin) > 50 ? 10 : 5;
+  for (let f=Math.ceil(fMin/fStep)*fStep; f<=fMax; f+=fStep){
+    const x = padL + innerW * (f-fMin)/(fMax-fMin);
+    ctx.beginPath(); ctx.moveTo(x, padT+innerH); ctx.lineTo(x, padT+innerH+3); ctx.stroke();
+    ctx.textAlign="center"; ctx.textBaseline="top";
+    ctx.fillText(f+" MHz", x, padT+innerH+6);
+  }
+
+  // Time axis (left): newest at top → oldest at bottom
+  // pick a tick step based on span
+  let tickStep;
+  if (span <= 6*3600)        tickStep = 3600;        // 1 h
+  else if (span <= 30*3600)  tickStep = 4*3600;      // 4 h
+  else if (span <= 8*86400)  tickStep = 86400;       // 1 d
+  else                       tickStep = 5*86400;     // 5 d
+  const useDate = span > 86400;
+  for (let i=0; i*tickStep <= span; i++){
+    const tt = t1 - i*tickStep;
+    if (tt < t0) break;
+    const yy = padT + innerH * (i*tickStep)/span;
+    ctx.beginPath(); ctx.moveTo(padL-3, yy); ctx.lineTo(padL, yy); ctx.stroke();
+    ctx.textAlign="right"; ctx.textBaseline="middle";
+    ctx.fillText(fmtTime(tt, useDate), padL-6, yy);
+  }
+  ctx.strokeStyle="#30363d"; ctx.strokeRect(padL, padT, innerW, innerH);
+  drawHamBands(ctx, padL, padT, innerW, innerH, fMin, fMax);
+
+  archGeom = { padL, padT, innerW, innerH, t0, t1, span, cols, rows, w, h, axis:"y" };
+}
+
+function drawSnap(snap) {
+  const c = $("archSnap");
+  const { ctx, w, h } = setupCanvas(c);
+  clearBg(ctx, w, h);
+  const padL=52, padR=14, padT=10, padB=32;
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  if (!snap || !snap.rx_mean){
+    ctx.fillStyle="#8b949e"; ctx.font="12px system-ui";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("Klicke in die Heatmap, um einen Snapshot zu laden.", w/2, h/2);
+    return;
+  }
+  const g = snap.granularity || 4;
+  const rxDiv = popcount(snap.rx_slot_mask||1);
+  const txDiv = popcount(snap.tx_slot_mask||1);
+  const rxMin=scaleArr(snap.rx_min,g,1), rxMax=scaleArr(snap.rx_max,g,1), rxAvg=scaleArr(snap.rx_mean,g,rxDiv);
+  const txMin=scaleArr(snap.tx_min,g,1), txMax=scaleArr(snap.tx_max,g,1), txAvg=scaleArr(snap.tx_mean,g,txDiv);
+  let maxY=10;
+  for (const a of [rxMin,rxMax,rxAvg,txMin,txMax,txAvg]) if (a) for (let i=0;i<a.length;i++) if (a[i]>maxY) maxY=a[i];
+  maxY = Math.ceil(maxY/5)*5;
+  const N = (rxAvg||txAvg).length;
+  const fMin=carrierFreqMHz(0,g), fMax=carrierFreqMHz(N-1,g);
+  const xTicks=[];
+  const step = (fMax-fMin) > 50 ? 10 : 5;
+  for (let f=Math.ceil(fMin/step)*step; f<=fMax; f+=step)
+    xTicks.push({ r:(f-fMin)/(fMax-fMin), label:f+" MHz" });
+  drawAxes(ctx, padL, padT, innerW, innerH, w, maxY, " dB", xTicks);
+
+  function drawDir(min,max,avg, fill, stroke){
+    const xOf = i => padL + innerW * i/(N-1);
+    const yOf = v => padT + innerH * (1 - Math.max(0,Math.min(maxY,v))/maxY);
+    if (min && max){
+      ctx.beginPath(); ctx.moveTo(xOf(0), yOf(max[0]));
+      for (let i=1;i<N;i++) ctx.lineTo(xOf(i), yOf(max[i]));
+      for (let i=N-1;i>=0;i--) ctx.lineTo(xOf(i), yOf(min[i]));
+      ctx.closePath(); ctx.fillStyle=fill; ctx.fill();
+    }
+    if (avg){
+      ctx.beginPath(); ctx.moveTo(xOf(0), yOf(avg[0]));
+      for (let i=1;i<N;i++) ctx.lineTo(xOf(i), yOf(avg[i]));
+      ctx.strokeStyle=stroke; ctx.lineWidth=1.3; ctx.stroke();
+    }
+  }
+  drawDir(rxMin,rxMax,rxAvg, "rgba(63,185,80,.18)", "#3fb950");
+  drawDir(txMin,txMax,txAvg, "rgba(240,136,62,.18)", "#f0883e");
+  drawHamBands(ctx, padL, padT, innerW, innerH, fMin, fMax);
+
+  $("snapMeta").textContent =
+    `${snap.source==="arch"?"arch":"live"} · ${fmtTime(snap.ts, true)} · ` +
+    `Rx ${snap.rx_phy ?? "–"} M  Tx ${snap.tx_phy ?? "–"} M`;
+}
+
+$("archHeat").addEventListener("click", async ev => {
+  if (!archGeom) return;
+  const rect = ev.currentTarget.getBoundingClientRect();
+  const y = ev.clientY - rect.top;
+  const r = (y - archGeom.padT) / archGeom.innerH;  // 0=top=newest
+  if (r < 0 || r > 1) return;
+  const ts = Math.round(archGeom.t1 - r * archGeom.span);
+  try {
+    const snap = await fetch("/api/snapshot?ts=" + ts).then(r=>r.json());
+    drawSnap(snap);
+  } catch (e){ console.error(e); }
+});
+
+$$("#heatDirToggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    heatDir = b.dataset.dir;
+    $$("#heatDirToggle button").forEach(x => x.classList.toggle("active", x===b));
+    if (archData) drawHeat(archData);
+  });
+});
+
+async function loadArchive(rangeKey) {
+  const now = Math.floor(Date.now()/1000);
+  let from, label, max_b;
+  if (rangeKey === "day"){   from = now - 24*3600;     label = "letzte 24 h"; max_b = 600; }
+  if (rangeKey === "week"){  from = now - 7*86400;     label = "letzte 7 Tage"; max_b = 800; }
+  if (rangeKey === "month"){ from = now - 30*86400;    label = "letzte 30 Tage"; max_b = 1000; }
+  $("archRangeLabel").textContent = label;
+  try {
+    const r = await fetch(`/api/range?from=${from}&to=${now}&max_buckets=${max_b}`).then(r=>r.json());
+    if (r.empty){ archData = null; }
+    else { archData = r; }
+    drawArchRate(archData);
+    drawArchPing(archData);
+    drawHeat(archData);
+    drawSnap(null);
+  } catch (e){
+    $("errBox").innerHTML = `<div class="err">Fehler: ${e.message}</div>`;
+  }
+}
+
+// ============================================================================
+// INFO tab
+// ============================================================================
+function fmtUptime(s) {
+  if (s == null) return "–";
+  const d = Math.floor(s / 86400); s -= d*86400;
+  const h = Math.floor(s / 3600);  s -= h*3600;
+  const m = Math.floor(s / 60);
+  const parts = [];
+  if (d) parts.push(d + "d");
+  if (h || d) parts.push(h + "h");
+  parts.push(m + "m");
+  return parts.join(" ");
+}
+function fmtTs(ts) { return ts ? new Date(ts*1000).toLocaleString("de-DE") : "–"; }
+function fmtNum(v, dec=1, suffix="") {
+  if (v == null) return "–";
+  return (typeof v === "number" ? v.toFixed(dec) : v) + suffix;
+}
+function kvRow(parent, k, v, opts={}) {
+  const dk = document.createElement("div"); dk.className = "k"; dk.textContent = k;
+  const dv = document.createElement("div"); dv.className = "v" + (opts.mono?" mono":"") + (opts.dim?" dim":"");
+  if (v && typeof v === "object" && v.nodeType) dv.appendChild(v); else dv.textContent = v ?? "–";
+  parent.appendChild(dk); parent.appendChild(dv);
+}
+
+function renderBignum(label, val, unit) {
+  const w = document.createElement("div");
+  w.innerHTML = `<div class="lbl">${label}</div><div class="bigval">${val ?? "–"}<small>${unit||""}</small></div>`;
+  return w;
+}
+
+function statusPill(text, kind) {
+  const p = document.createElement("span");
+  p.className = "pill" + (kind ? " " + kind : "");
+  p.textContent = text;
+  return p;
+}
+
+async function loadInfo() {
+  let d;
+  try {
+    d = await fetch("/api/insights").then(r=>r.json());
+  } catch (e) {
+    $("errBox").innerHTML = `<div class="err">Insights laden fehlgeschlagen: ${e.message}</div>`;
+    return;
+  }
+
+  // ---- Live overview "big numbers" ----
+  const big = $("infoBignums"); big.innerHTML = "";
+  const sp = d.spectrum || {};
+  big.appendChild(renderBignum("Rx", sp.rx_phy ?? "–", " Mbit/s"));
+  big.appendChild(renderBignum("Tx", sp.tx_phy ?? "–", " Mbit/s"));
+  big.appendChild(renderBignum("Ping", sp.ping_ms != null ? sp.ping_ms.toFixed(1) : "–", " ms"));
+  big.appendChild(renderBignum("Aktive Carrier (Rx)",
+    sp.active_carriers_rx != null ? `${sp.active_carriers_rx} / ${sp.carrier_count}` : "–", ""));
+  big.appendChild(renderBignum("Ø SNR (Rx)", fmtNum(sp.rx_mean_snr_db, 1), " dB"));
+  big.appendChild(renderBignum("p95 SNR", fmtNum(sp.rx_p95_snr_db, 1), " dB"));
+  big.appendChild(renderBignum("Spektrale Effizienz",
+    fmtNum(sp.spectral_efficiency_mbps_per_mhz, 2), " Mbit/s/MHz"));
+  big.appendChild(renderBignum("Notched Carrier (Rx)",
+    sp.notched_carriers_rx ?? "–", " / " + (sp.carrier_count ?? "–")));
+  $("infoLiveTs").textContent = sp.ts ? "Letzte Messung: " + fmtTs(sp.ts) : "—";
+
+  // ---- Adapters ----
+  const adp = $("infoAdapters"); adp.innerHTML = "";
+  for (const a of (d.device.adapters||[])) {
+    const role = a.is_local ? "Lokal" : "Remote";
+    const card = document.createElement("div");
+    card.style.cssText = "padding:8px 0; border-bottom:1px solid #21262d;";
+    card.innerHTML = `
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+        <b style="color:#f0f6fc">${a.model || "?"}</b>
+        <span class="pill ${a.is_local?'ok':''}">${role}</span>
+        <span class="pill ${a.status==='ACTIVE_AND_LINK'?'ok':'warn'}">${a.status || "?"}</span>
+      </div>
+      <div class="kv">
+        <div class="k">MAC</div><div class="v mono">${a.mac || "–"}</div>
+        <div class="k">Coupling</div><div class="v">${a.coupling || "–"}</div>
+        <div class="k">Verbindet zu</div><div class="v mono">${a.remote_adapters || "–"}</div>
+      </div>`;
+    adp.appendChild(card);
+  }
+  // Add link-level info (host IP, ping target) below
+  const meta = document.createElement("div");
+  meta.style.marginTop = "8px";
+  meta.innerHTML = `<div class="kv">
+    <div class="k">Lokaler Web-Endpoint</div><div class="v mono">http://${d.device.host}/</div>
+    <div class="k">Ping-Ziel</div><div class="v mono">${d.device.ping_target || "(deaktiviert)"}</div>
+  </div>`;
+  adp.appendChild(meta);
+
+  // ---- Spectrum kv ----
+  const sk = $("infoSpectrum"); sk.innerHTML = "";
+  if (sp.carrier_count) {
+    kvRow(sk, "Frequenzbereich", `${sp.freq_min_mhz} – ${sp.freq_max_mhz} MHz`);
+    kvRow(sk, "Carrier-Bins", `${sp.carrier_count}  (Schritt ${sp.carrier_step_khz} kHz)`);
+    kvRow(sk, "Aktive Carrier Rx", `${sp.active_carriers_rx} / ${sp.carrier_count}  (${(100*sp.active_carriers_rx/sp.carrier_count).toFixed(0)} %)`);
+    kvRow(sk, "Aktive Carrier Tx", `${sp.active_carriers_tx} / ${sp.carrier_count}  (${(100*sp.active_carriers_tx/sp.carrier_count).toFixed(0)} %)`);
+    kvRow(sk, "Notched (Rx = 0)", `${sp.notched_carriers_rx} / ${sp.carrier_count}  (${(100*sp.notched_carriers_rx/sp.carrier_count).toFixed(0)} %)`);
+    kvRow(sk, "Slots Rx / Tx", `${sp.rx_slots_active} / ${sp.tx_slots_active}  von 6`);
+    kvRow(sk, "SNR Ø Rx", fmtNum(sp.rx_mean_snr_db, 1) + " dB");
+    kvRow(sk, "SNR p50 Rx", fmtNum(sp.rx_p50_snr_db, 1) + " dB");
+    kvRow(sk, "SNR p95 Rx", fmtNum(sp.rx_p95_snr_db, 1) + " dB");
+    kvRow(sk, "SNR Ø Tx", fmtNum(sp.tx_mean_snr_db, 1) + " dB");
+    if (sp.best_rx_carrier)
+      kvRow(sk, "Bester Träger (Rx)", `${sp.best_rx_carrier.snr_db.toFixed(1)} dB @ ${sp.best_rx_carrier.freq_mhz} MHz`);
+    if (sp.worst_rx_carrier)
+      kvRow(sk, "Schwächster Träger (Rx)", `${sp.worst_rx_carrier.snr_db.toFixed(1)} dB @ ${sp.worst_rx_carrier.freq_mhz} MHz`);
+    kvRow(sk, "Spektrale Effizienz", fmtNum(sp.spectral_efficiency_mbps_per_mhz, 2) + " Mbit/s/MHz");
+  } else {
+    sk.innerHTML = '<div class="dim">Noch keine Spektrum-Daten.</div>';
+  }
+
+  // ---- Rate tables ----
+  function fillRateTable(tbody, stats) {
+    tbody.innerHTML = "";
+    const labels = { "5m":"letzte 5 min", "1h":"letzte Stunde", "24h":"letzte 24 h",
+                     "7d":"letzte 7 Tage", "30d":"letzte 30 Tage" };
+    for (const k of ["5m","1h","24h","7d","30d"]) {
+      const s = stats[k] || {};
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${labels[k]}</td>
+        <td>${fmtNum(s.avg, 1)}</td>
+        <td>${fmtNum(s.min, 0)}</td>
+        <td>${fmtNum(s.max, 0)}</td>
+        <td>${(s.n||0).toLocaleString("de-DE")}</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+  fillRateTable($("infoRates"), d.rates || {});
+  fillRateTable($("infoTxRates"), d.tx_rates || {});
+  fillRateTable($("infoPings"), d.ping || {});
+  $("infoPingTarget").textContent = d.device.ping_target ? "→ " + d.device.ping_target : "(deaktiviert)";
+
+  // ---- Service & DB ----
+  const sv = $("infoService"); sv.innerHTML = "";
+  kvRow(sv, "Version", d.service.version);
+  kvRow(sv, "Uptime", fmtUptime(d.service.uptime_seconds));
+  kvRow(sv, "Gestartet", fmtTs(d.service.start_ts));
+  kvRow(sv, "Poll-Intervall", d.service.poll_seconds + " s");
+  kvRow(sv, "Letzter Rollup", d.service.last_rollup_ts ? fmtTs(d.service.last_rollup_ts) : "(noch nie)");
+  kvRow(sv, "Nächster Rollup", "täglich um " + String(d.service.rollup_hour).padStart(2,"0") + ":00");
+  kvRow(sv, "DB-Größe", fmtBytes(d.db.size_bytes));
+  kvRow(sv, "Live-Samples", `${d.db.live_count.toLocaleString("de-DE")}  (${d.db.live_retention_hours} h Aufbewahrung)`);
+  kvRow(sv, "Arch-Buckets", `${d.db.arch_count.toLocaleString("de-DE")}  (${d.db.arch_retention_days} Tage, je ${d.db.arch_bucket_seconds} s)`);
+  if (d.db.live_from) kvRow(sv, "Live-Bereich", fmtTs(d.db.live_from) + " – " + fmtTs(d.db.live_to));
+  if (d.db.arch_from) kvRow(sv, "Arch-Bereich", fmtTs(d.db.arch_from) + " – " + fmtTs(d.db.arch_to));
+
+  // ---- Notches ----
+  const nb = $("infoNotches"); nb.innerHTML = "";
+  for (const n of (d.notches || [])) {
+    const tr = document.createElement("tr");
+    const both = n.rx_notched_pct >= 99 && n.tx_notched_pct >= 99;
+    const partial = (n.rx_notched_pct >= 99) !== (n.tx_notched_pct >= 99);
+    const status = both
+      ? '<span class="pill ok">vollständig gesperrt</span>'
+      : (partial ? '<span class="pill warn">nur eine Richtung</span>'
+                 : '<span class="pill err">nicht gesperrt</span>');
+    tr.innerHTML = `<td><b>${n.band}</b></td>
+      <td>${n.lo_mhz.toFixed(2)} – ${n.hi_mhz.toFixed(2)}</td>
+      <td>${n.carriers_in_band}</td>
+      <td>${n.rx_notched_pct.toFixed(0)} %</td>
+      <td>${n.tx_notched_pct.toFixed(0)} %</td>
+      <td>${status}</td>`;
+    nb.appendChild(tr);
+  }
+
+  // ---- Update inline numbers in the explanation ----
+  if (sp.carrier_count) {
+    $("explainCarriers").textContent = sp.carrier_count;
+    $("explainStep").textContent = "~" + sp.carrier_step_khz.toFixed(0) + " kHz";
+    $("explainRxSlots").textContent = sp.rx_slots_active;
+    $("explainTxSlots").textContent = sp.tx_slots_active;
+  }
+}
+
+// ============================================================================
+// stats + tabs
+// ============================================================================
+async function refreshStats() {
+  try {
+    const s = await fetch("/api/stats").then(r=>r.json());
+    $("dbSize").textContent     = fmtBytes(s.db_size_bytes);
+    $("liveCount").textContent  = s.live.count.toLocaleString("de-DE");
+    $("archCount").textContent  = s.arch.count.toLocaleString("de-DE");
+    const info = await fetch("/api/info").then(r=>r.json());
+    if (info.local_mac) $("adapterInfo").textContent = " · " + info.local_mac + " ↔ " + info.remote_mac;
+    if (info.ping_target){
+      $("livePingTarget").textContent = info.ping_target;
+      $("archPingTarget").textContent = "Roundtrip nach " + info.ping_target;
+    }
+  } catch(e){ /* ignore */ }
+}
+
+let currentTab = "live";
+function selectTab(name) {
+  currentTab = name;
+  $$("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab===name));
+  $$('main > section').forEach(s => s.classList.add("hidden"));
+  if (name === "live"){
+    document.querySelector('section[data-tab="live"]').classList.remove("hidden");
+    if (liveLatest) drawLiveSpectrum(liveLatest);
+    drawLiveRate();
+    drawLivePing();
+    drawWaterfall();
+  } else if (name === "info"){
+    document.querySelector('section[data-tab="info"]').classList.remove("hidden");
+    loadInfo();
+  } else {
+    document.querySelector('section[data-tab="archive"]').classList.remove("hidden");
+    loadArchive(name);
+  }
+}
+$$("#tabs button").forEach(b => b.addEventListener("click", () => selectTab(b.dataset.tab)));
+
+window.addEventListener("resize", () => {
+  if (currentTab === "live"){
+    if (liveLatest) drawLiveSpectrum(liveLatest);
+    drawLiveRate();
+    drawLivePing();
+    drawWaterfall();
+  } else if (archData){
+    drawArchRate(archData);
+    drawArchPing(archData);
+    drawHeat(archData);
+  }
+});
+
+prefillLiveBuffers();
+prefillWaterfall();
+startLive();
+refreshStats();
+setInterval(refreshStats, 5000);
+selectTab("live");
+</script>
+</body>
+</html>
