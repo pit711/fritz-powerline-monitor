@@ -58,6 +58,13 @@
                    padding: 3px 10px; cursor: pointer; border-radius: 3px; }
   .toggle button.active { background: #30363d; color: #f0f6fc; }
 
+  #archNav { color-scheme: dark; }
+  #archNav button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+                    border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
+  #archNav button:hover { background: #30363d; }
+  #archNav input[type=date] { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+                              border-radius: 4px; padding: 3px 6px; font: inherit; }
+
   .hidden { display: none !important; }
 
   .colorbar { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #6e7681; }
@@ -215,6 +222,15 @@
 
   <!-- ============= ARCHIV (Tag/Woche/Monat — gleicher Aufbau) ============= -->
   <section data-tab="archive" class="hidden">
+    <div class="card" id="archNavCard" style="padding:10px 14px">
+      <div id="archNav" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <button id="archPrev" title="zurück">◀</button>
+        <input type="date" id="archDate">
+        <button id="archNext" title="vor">▶</button>
+        <button id="archToday" title="aktueller Zeitpunkt">Heute</button>
+        <span id="archWindow" style="margin-left:12px; color:#c9d1d9; font-weight:600"></span>
+      </div>
+    </div>
     <div class="card">
       <h2>Datenrate
         <span class="right"><span id="archRangeLabel"></span></span>
@@ -1584,8 +1600,78 @@ $$("#devDetectToggle button").forEach(b => {
   });
 });
 
+// Archive date navigation: selected date anchors the shown window.
+let archSelectedDate = new Date();   // today by default
+
+function _isoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function _parseIso(s) {
+  const [y,m,d] = s.split("-").map(Number);
+  return new Date(y, m-1, d);
+}
+
+// Compute [from, to, label, maxBuckets] for a given rangeKey anchored at date.
+function _computeArchRange(rangeKey, date) {
+  const d = new Date(date);
+  d.setHours(0,0,0,0);
+  if (rangeKey === "day") {
+    const from = Math.floor(d.getTime()/1000);
+    const end = new Date(d); end.setDate(end.getDate()+1);
+    const label = d.toLocaleDateString("de-DE", {weekday:"short", day:"2-digit", month:"short", year:"numeric"});
+    return { from, to: Math.floor(end.getTime()/1000), label, max_b: 600 };
+  }
+  if (rangeKey === "week") {
+    // ISO week: Mon..Sun
+    const dow = d.getDay() || 7;   // 1..7
+    d.setDate(d.getDate() - dow + 1);
+    const from = Math.floor(d.getTime()/1000);
+    const end = new Date(d); end.setDate(end.getDate()+7);
+    const last = new Date(end); last.setDate(last.getDate()-1);
+    // ISO week number
+    const yStart = new Date(d.getFullYear(),0,1);
+    const wk = Math.ceil(((d - yStart)/86400000 + yStart.getDay()+1)/7);
+    const fmt = x => x.toLocaleDateString("de-DE", {day:"2-digit", month:"short"});
+    const label = `KW ${wk}  ·  ${fmt(d)} – ${fmt(last)} ${last.getFullYear()}`;
+    return { from, to: Math.floor(end.getTime()/1000), label, max_b: 800 };
+  }
+  if (rangeKey === "month") {
+    d.setDate(1);
+    const from = Math.floor(d.getTime()/1000);
+    const end = new Date(d); end.setMonth(end.getMonth()+1);
+    const label = d.toLocaleDateString("de-DE", {month:"long", year:"numeric"});
+    return { from, to: Math.floor(end.getTime()/1000), label, max_b: 1000 };
+  }
+  return null;
+}
+
+function _stepArchDate(dir) {
+  const d = new Date(archSelectedDate);
+  if (archRangeKey === "day")   d.setDate(d.getDate() + dir);
+  if (archRangeKey === "week")  d.setDate(d.getDate() + 7*dir);
+  if (archRangeKey === "month") d.setMonth(d.getMonth() + dir);
+  archSelectedDate = d;
+  $("archDate").value = _isoDate(d);
+  loadArchive(archRangeKey);
+}
+
+$("archPrev")?.addEventListener("click", () => _stepArchDate(-1));
+$("archNext")?.addEventListener("click", () => _stepArchDate(+1));
+$("archToday")?.addEventListener("click", () => {
+  archSelectedDate = new Date();
+  $("archDate").value = _isoDate(archSelectedDate);
+  loadArchive(archRangeKey);
+});
+$("archDate")?.addEventListener("change", ev => {
+  if (!ev.target.value) return;
+  archSelectedDate = _parseIso(ev.target.value);
+  loadArchive(archRangeKey);
+});
+
 async function loadArchive(rangeKey) {
   archRangeKey = rangeKey;
+  // Seed the date picker the first time around.
+  if ($("archDate") && !$("archDate").value) $("archDate").value = _isoDate(archSelectedDate);
   // Week-only controls: show the device-pattern toggle; reset + hide otherwise.
   const devToggle = $("devDetectToggle");
   if (rangeKey === "week") {
@@ -1598,14 +1684,20 @@ async function loadArchive(rangeKey) {
     $("devControls").classList.add("hidden");
     $$("#devDetectToggle button").forEach((x, i) => x.classList.toggle("active", i === 0));
   }
+  const { from, to, label, max_b } = _computeArchRange(rangeKey, archSelectedDate);
   const now = Math.floor(Date.now()/1000);
-  let from, label, max_b;
-  if (rangeKey === "day"){   from = now - 24*3600;     label = "letzte 24 h"; max_b = 600; }
-  if (rangeKey === "week"){  from = now - 7*86400;     label = "letzte 7 Tage"; max_b = 800; }
-  if (rangeKey === "month"){ from = now - 30*86400;    label = "letzte 30 Tage"; max_b = 1000; }
+  const isFuture = from > now;
+  const clampedTo = Math.min(to, now);
+  // UI window line (always, even if no data)
+  if ($("archWindow")) $("archWindow").textContent = label;
   $("archRangeLabel").textContent = label;
+  if (isFuture) {
+    archData = null;
+    drawArchRate(null); drawArchPing(null); drawHeat(null); drawSnap(null);
+    return;
+  }
   try {
-    const r = await fetch(`/api/range?from=${from}&to=${now}&max_buckets=${max_b}`).then(r=>r.json());
+    const r = await fetch(`/api/range?from=${from}&to=${clampedTo}&max_buckets=${max_b}`).then(r=>r.json());
     if (r.empty){ archData = null; }
     else { archData = r; }
     drawArchRate(archData);
