@@ -1889,7 +1889,7 @@ function initWfControls() {
       });
     }
   }
-  document.querySelectorAll('.wf-controls input[type=range]').forEach(inp => {
+  document.querySelectorAll('.wf-controls input[type=range][data-wf][data-prop]').forEach(inp => {
     const wf = inp.dataset.wf, prop = inp.dataset.prop;
     const valEl = document.querySelector(`[data-for="${wf}-${prop}"]`);
     inp.value = wfSettings[wf][prop];
