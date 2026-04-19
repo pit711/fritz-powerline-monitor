@@ -243,6 +243,10 @@
           <button data-dir="rx" class="active">Rx</button>
           <button data-dir="tx">Tx</button>
         </div>
+        <div class="toggle hidden" id="devDetectToggle">
+          <button data-on="0" class="active">Geräte-Muster aus</button>
+          <button data-on="1">an</button>
+        </div>
         <span class="right colorbar"><span class="lo" id="archCbLo">0 dB</span><span class="gradient" id="archGradient"></span><span class="hi" id="archCbHi">50 dB</span></span>
       </h2>
       <canvas id="archHeat" height="500"></canvas>
@@ -258,6 +262,7 @@
       <div class="legend">
         <span style="color:#6e7681">Klicke in den Wasserfall, um Spektrum-Snapshot zum gewählten Zeitpunkt zu laden →</span>
       </div>
+      <div id="devResults" class="hidden" style="margin-top:12px; color:#c9d1d9; font-size:12.5px;"></div>
     </div>
     <div class="card">
       <h2>Spektrum-Snapshot
@@ -901,6 +906,9 @@ function startLive() {
 let archData = null;
 let heatDir = "rx";  // "rx" or "tx"
 let archGeom = null;  // {padL, padT, innerW, innerH, t0, t1, n}
+let archRangeKey = null;  // "day" | "week" | "month"
+let devDetectOn = false;
+let detectedDevices = null;
 
 function drawArchPing(data) {
   const c = $("archPing");
@@ -1096,6 +1104,10 @@ function drawHeat(data) {
 
   archGeom = { padL, padT, innerW, innerH, t0, t1, span, cols, rows, w, h,
                fMin, fMax, granularity: data.granularity || 4, axis:"y" };
+
+  if (archRangeKey === "week" && devDetectOn && detectedDevices) {
+    drawDeviceOverlay(ctx, archGeom, detectedDevices);
+  }
 }
 
 function drawSnap(snap) {
@@ -1171,7 +1183,275 @@ $$("#heatDirToggle button").forEach(b => {
   });
 });
 
+// ============================================================================
+// WEEK tab: rhythmic-device detection on the Rx waterfall
+// ============================================================================
+// Per carrier: active where dB > median + 3 dB.
+// Bin the week into slotsPerHour * 24 slots/day, then for each carrier count
+// on how many of the 7 days it was active in each slot. A slot with ≥3 active
+// days across one carrier band (grouped by contiguous active neighbours) is a
+// "rhythmic pattern". Reports the freq range, on/off time, and guesses a
+// device name if the pattern is stable on ≥5 of 7 days.
+
+function detectRhythmicDevices(data, opts = {}) {
+  const {
+    thresholdDb = 3,
+    minDurationMin = 45,
+    minDays = 3,
+    minCarriers = 1,
+    slotsPerHour = 2,         // 30-min slots → 48 slots/day
+    maxGapCarriers = 1,       // bridge 1-carrier gap when grouping bands
+  } = opts;
+  if (!data || !data.rx_heat || !data.phy || !data.phy.length) return null;
+  const heat = data.rx_heat, phy = data.phy;
+  const N = data.carrier_count, rows = phy.length;
+  const slotsPerDay = slotsPerHour * 24, slotSec = 86400 / slotsPerDay;
+
+  // Bucket each row to (day, slot) in local time.
+  const dayOf = ts => { const d = new Date(ts*1000); d.setHours(0,0,0,0); return Math.floor(d.getTime()/1000); };
+  const slotOf = ts => { const d = new Date(ts*1000); return ((d.getHours()*60 + d.getMinutes()) / (60/slotsPerHour)) | 0; };
+  const daySet = new Set(phy.map(p => dayOf(p.ts)));
+  const days = [...daySet].sort((a,b) => a-b);
+  const nDays = days.length;
+  if (nDays < 3) return null;
+  const dayIdx = new Map(days.map((d,i) => [d,i]));
+
+  // Per-carrier baseline (median) — skip carriers with too few valid samples.
+  const baseline = new Float32Array(N);
+  const scratch = [];
+  for (let c = 0; c < N; c++) {
+    scratch.length = 0;
+    for (let r = 0; r < rows; r++) {
+      const v = heat[r] && heat[r][c];
+      if (v != null && v > 0) scratch.push(v);
+    }
+    if (scratch.length < rows * 0.3) { baseline[c] = Infinity; continue; }
+    scratch.sort((a,b) => a-b);
+    baseline[c] = scratch[scratch.length >> 1];
+  }
+
+  // act[c][d*slotsPerDay + s] = was carrier c active anywhere in slot s of day d?
+  const act = new Uint8Array(N * nDays * slotsPerDay);
+  for (let r = 0; r < rows; r++) {
+    const row = heat[r]; if (!row) continue;
+    const di = dayIdx.get(dayOf(phy[r].ts));
+    const si = slotOf(phy[r].ts);
+    const bucket = di * slotsPerDay + si;
+    for (let c = 0; c < N; c++) {
+      const v = row[c];
+      if (v != null && v > baseline[c] + thresholdDb) {
+        act[c * nDays * slotsPerDay + bucket] = 1;
+      }
+    }
+  }
+
+  // Per-carrier, per-slot-of-day: count of days with activity.
+  const carSlotDays = new Int16Array(N * slotsPerDay);
+  for (let c = 0; c < N; c++) {
+    for (let d = 0; d < nDays; d++) {
+      const off = c * nDays * slotsPerDay + d * slotsPerDay;
+      const csd = c * slotsPerDay;
+      for (let s = 0; s < slotsPerDay; s++) if (act[off + s]) carSlotDays[csd + s]++;
+    }
+  }
+
+  // Carrier is rhythmic if any slot-of-day hits >=minDays AND there's some
+  // off-time (otherwise it's just broadband noise, not a rhythm).
+  const rhythmic = new Uint8Array(N);
+  for (let c = 0; c < N; c++) {
+    let maxCnt = 0, minCnt = nDays;
+    for (let s = 0; s < slotsPerDay; s++) {
+      const v = carSlotDays[c * slotsPerDay + s];
+      if (v > maxCnt) maxCnt = v;
+      if (v < minCnt) minCnt = v;
+    }
+    if (maxCnt >= minDays && maxCnt > minCnt) rhythmic[c] = 1;
+  }
+
+  // Group contiguous rhythmic carriers into bands.
+  const bands = [];
+  let cur = null, gap = 0;
+  for (let c = 0; c < N; c++) {
+    if (rhythmic[c]) {
+      if (!cur) cur = { lo: c, hi: c }; else cur.hi = c;
+      gap = 0;
+    } else if (cur) {
+      if (++gap > maxGapCarriers) {
+        if (cur.hi - cur.lo + 1 >= minCarriers) bands.push(cur);
+        cur = null; gap = 0;
+      }
+    }
+  }
+  if (cur && cur.hi - cur.lo + 1 >= minCarriers) bands.push(cur);
+
+  const g = data.granularity || 4;
+  const devices = [];
+  for (const band of bands) {
+    const bw = band.hi - band.lo + 1;
+    // Aggregate across band: for each slot-of-day, count days where majority of band was active.
+    const slotDays = new Int16Array(slotsPerDay);
+    for (let d = 0; d < nDays; d++) {
+      for (let s = 0; s < slotsPerDay; s++) {
+        let n = 0;
+        for (let c = band.lo; c <= band.hi; c++) {
+          if (act[c * nDays * slotsPerDay + d * slotsPerDay + s]) n++;
+        }
+        if (n > bw * 0.5) slotDays[s]++;
+      }
+    }
+    const on = new Uint8Array(slotsPerDay);
+    for (let s = 0; s < slotsPerDay; s++) on[s] = slotDays[s] >= minDays ? 1 : 0;
+
+    // Handle midnight-wrapping run first.
+    const runs = [];
+    if (on[0] && on[slotsPerDay - 1]) {
+      let L = slotsPerDay - 1; while (L > 0 && on[L-1]) L--;
+      let R = 0;               while (R < slotsPerDay - 1 && on[R+1]) R++;
+      if (L === 0 && R === slotsPerDay - 1) {
+        runs.push({ startSlot: 0, endSlot: slotsPerDay, wrapped: false });
+      } else {
+        runs.push({ startSlot: L, endSlot: slotsPerDay + R + 1, wrapped: true });
+        for (let s = L; s < slotsPerDay; s++) on[s] = 0;
+        for (let s = 0; s <= R; s++) on[s] = 0;
+      }
+    }
+    for (let s = 0; s < slotsPerDay; s++) {
+      if (!on[s]) continue;
+      const start = s; while (s < slotsPerDay && on[s]) s++;
+      runs.push({ startSlot: start, endSlot: s, wrapped: false });
+    }
+
+    for (const run of runs) {
+      const durMin = (run.endSlot - run.startSlot) * (60 / slotsPerHour);
+      if (durMin < minDurationMin) continue;
+      let maxDays = 0;
+      for (let s = run.startSlot; s < run.endSlot; s++) {
+        const ss = s % slotsPerDay;
+        if (slotDays[ss] > maxDays) maxDays = slotDays[ss];
+      }
+      devices.push({
+        carrierLo: band.lo, carrierHi: band.hi,
+        freqLoMHz: carrierFreqMHz(band.lo, g),
+        freqHiMHz: carrierFreqMHz(band.hi, g),
+        startSlot: run.startSlot % slotsPerDay,
+        endSlot: run.endSlot % slotsPerDay,
+        wrapped: run.wrapped,
+        durMin, activeDays: maxDays, totalDays: nDays,
+        slotsPerDay, slotSec,
+      });
+    }
+  }
+  devices.sort((a,b) => a.freqLoMHz - b.freqLoMHz);
+  return devices;
+}
+
+function _fmtSlot(slot, slotsPerDay) {
+  const min = slot * (1440 / slotsPerDay);
+  const h = Math.floor(min / 60), m = min - h * 60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+function guessDeviceName(dev) {
+  if (dev.activeDays < Math.ceil(dev.totalDays * 5/7)) return null;
+  const onH = dev.startSlot / (dev.slotsPerDay / 24);
+  const durH = dev.durMin / 60;
+  if (durH >= 20)                           return "Dauerbetrieb (Kühlgerät / Router / Heizung)";
+  if (dev.wrapped)                          return "Nachtschaltung";
+  if (durH >= 10 && durH <= 18 && onH >= 4 && onH <= 12)
+                                             return "Beleuchtungs-Timer (z. B. Aquarium)";
+  if (durH >= 5  && durH <= 10 && onH >= 5 && onH <= 10)
+                                             return "Morgengerät (Kaffee / Boiler)";
+  if (durH <= 4  && onH >= 17 && onH <= 22) return "Abend-Gerät (Lampe / TV)";
+  return null;
+}
+
+function renderDeviceResults(devices) {
+  const box = $("devResults");
+  if (!devices || !devices.length) {
+    box.innerHTML = '<div style="color:#8b949e">Keine rhythmischen Muster erkannt (Rx, Schwelle +3 dB über Carrier-Median, ≥3 Tage, ≥45 min).</div>';
+    return;
+  }
+  const lines = devices.map(d => {
+    const name = guessDeviceName(d);
+    const freqs = d.carrierLo === d.carrierHi
+      ? `${d.freqLoMHz.toFixed(2)} MHz`
+      : `${d.freqLoMHz.toFixed(2)}–${d.freqHiMHz.toFixed(2)} MHz`;
+    const on  = _fmtSlot(d.startSlot, d.slotsPerDay);
+    const off = _fmtSlot(d.endSlot,   d.slotsPerDay);
+    const hrs = (d.durMin / 60).toFixed(1);
+    const tag = name ? ` · <span style="color:#d2a8ff">${name}</span>` : "";
+    return `<div>• <b>${freqs}</b> · ${on}–${off} (${hrs} h) · ${d.activeDays}/${d.totalDays} Tage${tag}</div>`;
+  });
+  box.innerHTML = `<div style="margin-bottom:6px; color:#8b949e">Rhythmische Muster (Rx, Schwelle +3 dB, ≥3 Tage):</div>` + lines.join("");
+}
+
+function drawDeviceOverlay(ctx, geom, devices) {
+  if (!geom || !devices || !devices.length) return;
+  const { padL, padT, innerW, innerH, t0, t1, cols } = geom;
+  const span = Math.max(1, t1 - t0);
+  // Collect local midnights spanning t0..t1+1d so wrapped windows reach.
+  const midnights = [];
+  const d0 = new Date(t0 * 1000); d0.setHours(0,0,0,0);
+  let mts = Math.floor(d0.getTime() / 1000);
+  while (mts < t1 + 86400) { midnights.push(mts); mts += 86400; }
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "rgba(241,196,15,0.9)";
+  ctx.font = "10px system-ui";
+  ctx.textBaseline = "bottom"; ctx.textAlign = "left";
+  for (const dev of devices) {
+    const x0 = padL + innerW * dev.carrierLo       / cols;
+    const x1 = padL + innerW * (dev.carrierHi + 1) / cols;
+    for (const mt of midnights) {
+      const sOn = mt + dev.startSlot * dev.slotSec;
+      const sOff = (dev.wrapped ? mt + 86400 : mt) + dev.endSlot * dev.slotSec;
+      if (sOff <= t0 || sOn >= t1) continue;
+      const a = Math.max(sOn, t0), b = Math.min(sOff, t1);
+      const y0 = padT + innerH * (t1 - b) / span;
+      const y1 = padT + innerH * (t1 - a) / span;
+      ctx.strokeRect(x0 + 0.5, y0 + 0.5, Math.max(2, x1 - x0 - 1), Math.max(2, y1 - y0 - 1));
+    }
+    // One label at the top-right of the freq band.
+    const name = guessDeviceName(dev);
+    const lbl = `${dev.freqLoMHz.toFixed(2)} MHz${name ? " · " + name : ""}`;
+    ctx.fillStyle = "rgba(13,17,23,0.75)";
+    const w = ctx.measureText(lbl).width + 6;
+    ctx.fillRect(x1 - w, padT + 2, w, 13);
+    ctx.fillStyle = "rgba(241,196,15,0.95)";
+    ctx.fillText(lbl, x1 - w + 3, padT + 14);
+  }
+  ctx.restore();
+}
+
+$$("#devDetectToggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    devDetectOn = b.dataset.on === "1";
+    $$("#devDetectToggle button").forEach(x => x.classList.toggle("active", x === b));
+    if (devDetectOn && archData && archRangeKey === "week") {
+      detectedDevices = detectRhythmicDevices(archData);
+      renderDeviceResults(detectedDevices);
+      $("devResults").classList.remove("hidden");
+    } else {
+      detectedDevices = null;
+      $("devResults").classList.add("hidden");
+    }
+    if (archData) drawHeat(archData);
+  });
+});
+
 async function loadArchive(rangeKey) {
+  archRangeKey = rangeKey;
+  // Week-only controls: show the device-pattern toggle; reset + hide otherwise.
+  const devToggle = $("devDetectToggle");
+  if (rangeKey === "week") {
+    devToggle.classList.remove("hidden");
+  } else {
+    devToggle.classList.add("hidden");
+    devDetectOn = false;
+    detectedDevices = null;
+    $("devResults").classList.add("hidden");
+    $$("#devDetectToggle button").forEach((x, i) => x.classList.toggle("active", i === 0));
+  }
   const now = Math.floor(Date.now()/1000);
   let from, label, max_b;
   if (rangeKey === "day"){   from = now - 24*3600;     label = "letzte 24 h"; max_b = 600; }
@@ -1184,6 +1464,11 @@ async function loadArchive(rangeKey) {
     else { archData = r; }
     drawArchRate(archData);
     drawArchPing(archData);
+    if (devDetectOn && archRangeKey === "week" && archData) {
+      detectedDevices = detectRhythmicDevices(archData);
+      renderDeviceResults(detectedDevices);
+      $("devResults").classList.remove("hidden");
+    }
     drawHeat(archData);
     drawSnap(null);
   } catch (e){
