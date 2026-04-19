@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 import os
+import platform
 import queue
 import re
 import socket
@@ -38,11 +39,21 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# When frozen by PyInstaller, read-only resources (dashboard.html) live inside
+# the bundle (sys._MEIPASS) while user data lives next to the executable. When
+# running as a normal script, everything shares one directory.
+if getattr(sys, "frozen", False):
+    BUNDLE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(sys.executable)))
+    HERE = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BUNDLE_DIR = HERE = os.path.dirname(os.path.abspath(__file__))
+
 CONFIG_PATH = os.path.join(HERE, "config.json")
 SECRET_PATH = os.path.join(HERE, ".secret")
 DB_PATH = os.path.join(HERE, "data.db")
-DASHBOARD_HTML = os.path.join(HERE, "dashboard.html")
+DASHBOARD_HTML = os.path.join(BUNDLE_DIR, "dashboard.html")
+
+_SYSTEM = platform.system()  # "Linux" | "Darwin" | "Windows"
 
 PASSWORD_SCHEME = "scrypt-hmac-sha256-v1"
 
@@ -262,12 +273,24 @@ def decrypt_password(token):
 
 _PING_RE = re.compile(r"time[=<]([\d.]+)\s*ms")
 
+def _ping_cmd(target, timeout):
+    """Per-OS one-shot ping arguments. Output parsed by _PING_RE (`time=X ms`)."""
+    t = int(timeout)
+    if _SYSTEM == "Windows":
+        return ["ping", "-n", "1", "-w", str(t * 1000), target]
+    if _SYSTEM == "Darwin":
+        # BSD ping: -W is milliseconds
+        return ["ping", "-c", "1", "-W", str(t * 1000), "-n", target]
+    # Linux / other
+    return ["ping", "-c", "1", "-W", str(t), "-n", target]
+
+
 def ping_once(target, timeout=2):
     if not target:
         return None
     try:
         r = subprocess.run(
-            ["ping", "-c", "1", "-W", str(int(timeout)), "-n", target],
+            _ping_cmd(target, timeout),
             capture_output=True, timeout=timeout + 1, text=True,
         )
         if r.returncode != 0:

@@ -1,0 +1,116 @@
+name: Build standalone binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to cut the release under (e.g. v0.1-beta)"
+        required: false
+        default: "v0.1-beta"
+
+jobs:
+  build:
+    name: Build · ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            ext: .exe
+            sep: ";"
+          - os: macos-latest
+            name: macos
+            ext: ""
+            sep: ":"
+          - os: ubuntu-latest
+            name: linux
+            ext: ""
+            sep: ":"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build single-file binary
+        shell: bash
+        run: |
+          pyinstaller --onefile \
+            --name fritz-powerline-monitor \
+            --add-data "dashboard.html${{ matrix.sep }}." \
+            monitor.py
+          mv "dist/fritz-powerline-monitor${{ matrix.ext }}" \
+             "dist/fritz-powerline-monitor-${{ matrix.name }}${{ matrix.ext }}"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.name }}
+          path: dist/fritz-powerline-monitor-${{ matrix.name }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
+
+      - name: Create / update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          cat > /tmp/notes.md <<'EOF'
+          First public beta. Pre-built single-file binaries for Windows, macOS and Linux — no Python runtime required.
+
+          ## Install
+          1. Download the binary for your OS below and drop it in a **user-writable folder** (the app creates `config.json`, `.secret` and `data.db` next to itself on first run).
+          2. Run it — the interactive setup wizard launches automatically.
+             - `fritz-powerline-monitor-windows.exe`
+             - `./fritz-powerline-monitor-macos` (may need `chmod +x` and a right-click → Open to bypass Gatekeeper once)
+             - `./fritz-powerline-monitor-linux` (may need `chmod +x`)
+          3. Open `http://localhost:8089/` in a browser.
+
+          ## Notes
+          - Windows Defender / SmartScreen occasionally flags unsigned PyInstaller binaries on first run. If you built from source you can reproduce the binary bit-for-bit via the `Build standalone binaries` workflow.
+          - Existing systemd-based installs on Linux keep working with `python3 monitor.py`; the binary is an alternative, not a replacement.
+          - This is a **beta**: the storage schema, config format and setup wizard behaviour may still change.
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --prerelease \
+              --notes-file /tmp/notes.md \
+              artifacts/*
+          fi
