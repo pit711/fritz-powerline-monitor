@@ -262,6 +262,25 @@
       <div class="legend">
         <span style="color:#6e7681">Klicke in den Wasserfall, um Spektrum-Snapshot zum gewählten Zeitpunkt zu laden →</span>
       </div>
+      <div id="devControls" class="wf-controls hidden" style="margin-top:10px">
+        <div class="toggle" id="devVerToggle" style="align-self:center" title="V2 filtert Amateurfunk-Notches und dauerhaft deaktivierte Träger raus">
+          <button data-ver="v1">V1</button>
+          <button data-ver="v2" class="active">V2</button>
+        </div>
+        <div class="toggle" id="devModeToggle" style="align-self:center">
+          <button data-mode="normal" class="active">Normal</button>
+          <button data-mode="inverted">Invertiert</button>
+        </div>
+        <label>Schwelle
+          <input type="range" id="devThr" min="0.5" max="10" step="0.5" value="2">
+          <span class="val" data-for="dev-thr">2.0 dB</span></label>
+        <label>Mind. Tage
+          <input type="range" id="devDays" min="1" max="7" step="1" value="2">
+          <span class="val" data-for="dev-days">2</span></label>
+        <label>Mind. Dauer
+          <input type="range" id="devDur" min="15" max="240" step="15" value="30">
+          <span class="val" data-for="dev-dur">30 min</span></label>
+      </div>
       <div id="devResults" class="hidden" style="margin-top:12px; color:#c9d1d9; font-size:12.5px;"></div>
     </div>
     <div class="card">
@@ -909,6 +928,9 @@ let archGeom = null;  // {padL, padT, innerW, innerH, t0, t1, n}
 let archRangeKey = null;  // "day" | "week" | "month"
 let devDetectOn = false;
 let detectedDevices = null;
+let detectionDiag = null;
+let devMode = "normal";  // "normal" = rhythmic spikes above baseline; "inverted" = rhythmic dips below
+let devVer  = "v2";      // "v1" = raw algorithm; "v2" = skip ham-band + always-dark carriers
 
 function drawArchPing(data) {
   const c = $("archPing");
@@ -1195,12 +1217,15 @@ $$("#heatDirToggle button").forEach(b => {
 
 function detectRhythmicDevices(data, opts = {}) {
   const {
-    thresholdDb = 3,
-    minDurationMin = 45,
-    minDays = 3,
+    thresholdDb = 2,
+    minDurationMin = 30,
+    minDays = 2,
     minCarriers = 1,
     slotsPerHour = 2,         // 30-min slots → 48 slots/day
     maxGapCarriers = 1,       // bridge 1-carrier gap when grouping bands
+    inverted = false,         // true → detect rhythmic DIPS (dB < baseline - threshold)
+    version = "v2",           // "v1" = raw; "v2" = skip ham bands + always-dark carriers
+    darkBaselineDb = 1.0,     // V2: baseline below this → carrier is considered permanently off
   } = opts;
   if (!data || !data.rx_heat || !data.phy || !data.phy.length) return null;
   const heat = data.rx_heat, phy = data.phy;
@@ -1213,7 +1238,6 @@ function detectRhythmicDevices(data, opts = {}) {
   const daySet = new Set(phy.map(p => dayOf(p.ts)));
   const days = [...daySet].sort((a,b) => a-b);
   const nDays = days.length;
-  if (nDays < 3) return null;
   const dayIdx = new Map(days.map((d,i) => [d,i]));
 
   // Per-carrier baseline (median) — skip carriers with too few valid samples.
@@ -1230,17 +1254,44 @@ function detectRhythmicDevices(data, opts = {}) {
     baseline[c] = scratch[scratch.length >> 1];
   }
 
-  // act[c][d*slotsPerDay + s] = was carrier c active anywhere in slot s of day d?
+  // V2: mask out carriers whose dips/spikes would be meaningless.
+  //   - ham-band carriers (regulatory notches, not devices)
+  //   - permanently-dark carriers (chip disabled; baseline ≈ 0)
+  let excludedHam = 0, excludedDark = 0;
+  if (version === "v2") {
+    const g = data.granularity || 4;
+    for (let c = 0; c < N; c++) {
+      if (!isFinite(baseline[c])) continue;
+      const f = carrierFreqMHz(c, g);
+      let isHam = false;
+      for (const hb of HAM_BANDS) { if (f >= hb.lo && f <= hb.hi) { isHam = true; break; } }
+      if (isHam)                         { baseline[c] = Infinity; excludedHam++;  continue; }
+      if (baseline[c] < darkBaselineDb)  { baseline[c] = Infinity; excludedDark++; }
+    }
+  }
+
+  // act[c][d*slotsPerDay + s] = was carrier c "active" anywhere in slot s of day d?
+  // Normal mode: dB rose above baseline (spike — a device injecting noise).
+  // Inverted mode: dB dropped below baseline (dip — a device suppressing the signal on that carrier).
   const act = new Uint8Array(N * nDays * slotsPerDay);
   for (let r = 0; r < rows; r++) {
     const row = heat[r]; if (!row) continue;
     const di = dayIdx.get(dayOf(phy[r].ts));
     const si = slotOf(phy[r].ts);
     const bucket = di * slotsPerDay + si;
-    for (let c = 0; c < N; c++) {
-      const v = row[c];
-      if (v != null && v > baseline[c] + thresholdDb) {
-        act[c * nDays * slotsPerDay + bucket] = 1;
+    if (inverted) {
+      for (let c = 0; c < N; c++) {
+        const v = row[c], b = baseline[c];
+        if (v != null && isFinite(b) && b - v > thresholdDb) {
+          act[c * nDays * slotsPerDay + bucket] = 1;
+        }
+      }
+    } else {
+      for (let c = 0; c < N; c++) {
+        const v = row[c];
+        if (v != null && v > baseline[c] + thresholdDb) {
+          act[c * nDays * slotsPerDay + bucket] = 1;
+        }
       }
     }
   }
@@ -1342,7 +1393,18 @@ function detectRhythmicDevices(data, opts = {}) {
     }
   }
   devices.sort((a,b) => a.freqLoMHz - b.freqLoMHz);
-  return devices;
+  let rhythmicCount = 0;
+  for (let c = 0; c < N; c++) if (rhythmic[c]) rhythmicCount++;
+  const diag = {
+    nDays, nRows: rows, nCarriers: N,
+    rhythmicCarriers: rhythmicCount,
+    nBands: bands.length,
+    excludedHam, excludedDark,
+    opts: { thresholdDb, minDays, minDurationMin, slotsPerHour, inverted, version },
+  };
+  // Tag each device with the mode so the renderer can pick an appropriate name/label.
+  for (const d of devices) d.inverted = inverted;
+  return { devices, diag };
 }
 
 function _fmtSlot(slot, slotsPerDay) {
@@ -1355,6 +1417,15 @@ function guessDeviceName(dev) {
   if (dev.activeDays < Math.ceil(dev.totalDays * 5/7)) return null;
   const onH = dev.startSlot / (dev.slotsPerDay / 24);
   const durH = dev.durMin / 60;
+  if (dev.inverted) {
+    // Rhythmic dips usually mean a device ON that device eats into the SNR
+    // (e.g. switching supply, motor harmonics). Less safe to name specifically.
+    if (durH >= 20)                          return "Dauer-Störer (Netzteil / Router)";
+    if (dev.wrapped)                         return "Nachts laufendes Gerät";
+    if (durH >= 10 && onH >= 4 && onH <= 12) return "Tagsüber laufendes Gerät (z. B. Aquarium / Beleuchtung)";
+    if (durH <= 4 && onH >= 17 && onH <= 22) return "Abend-Gerät";
+    return null;
+  }
   if (durH >= 20)                           return "Dauerbetrieb (Kühlgerät / Router / Heizung)";
   if (dev.wrapped)                          return "Nachtschaltung";
   if (durH >= 10 && durH <= 18 && onH >= 4 && onH <= 12)
@@ -1365,10 +1436,26 @@ function guessDeviceName(dev) {
   return null;
 }
 
-function renderDeviceResults(devices) {
+function renderDeviceResults(devices, diag) {
   const box = $("devResults");
+  let diagLine = "";
+  if (diag) {
+    const o = diag.opts;
+    const ver = (o.version || "v1").toUpperCase();
+    const mode = o.inverted ? "invertiert (Dips)" : "normal (Spikes)";
+    const thrSign = o.inverted ? "−" : "+";
+    const excl = (diag.excludedHam + diag.excludedDark)
+      ? ` · ${diag.excludedHam} HAM + ${diag.excludedDark} dunkel ausgeblendet`
+      : "";
+    diagLine = `<div style="color:#8b949e; margin-bottom:6px">` +
+      `Rx · ${ver} · ${mode} · ${diag.nDays} Tag(e) · ${diag.nCarriers} Carrier${excl} · ` +
+      `${diag.rhythmicCarriers} rhythmisch · ${diag.nBands} Band/Bänder · ` +
+      `Schwelle ${thrSign}${o.thresholdDb} dB, ≥${o.minDays} Tage, ≥${o.minDurationMin} min` +
+      `</div>`;
+  }
   if (!devices || !devices.length) {
-    box.innerHTML = '<div style="color:#8b949e">Keine rhythmischen Muster erkannt (Rx, Schwelle +3 dB über Carrier-Median, ≥3 Tage, ≥45 min).</div>';
+    box.innerHTML = diagLine +
+      '<div style="color:#8b949e">Kein rhythmisches Muster erkannt — versuche Schwelle / Tage / Dauer zu reduzieren, oder den Modus umzuschalten.</div>';
     return;
   }
   const lines = devices.map(d => {
@@ -1382,8 +1469,62 @@ function renderDeviceResults(devices) {
     const tag = name ? ` · <span style="color:#d2a8ff">${name}</span>` : "";
     return `<div>• <b>${freqs}</b> · ${on}–${off} (${hrs} h) · ${d.activeDays}/${d.totalDays} Tage${tag}</div>`;
   });
-  box.innerHTML = `<div style="margin-bottom:6px; color:#8b949e">Rhythmische Muster (Rx, Schwelle +3 dB, ≥3 Tage):</div>` + lines.join("");
+  box.innerHTML = diagLine + lines.join("");
 }
+
+function currentDevOpts() {
+  const thr = parseFloat($("devThr").value);
+  const days = parseInt($("devDays").value, 10);
+  const dur = parseInt($("devDur").value, 10);
+  return {
+    thresholdDb: thr, minDays: days, minDurationMin: dur,
+    inverted: devMode === "inverted",
+    version: devVer,
+  };
+}
+
+function runDetection() {
+  if (!(devDetectOn && archData && archRangeKey === "week")) {
+    detectedDevices = null; detectionDiag = null; return;
+  }
+  const res = detectRhythmicDevices(archData, currentDevOpts());
+  detectedDevices = res ? res.devices : null;
+  detectionDiag  = res ? res.diag    : null;
+  renderDeviceResults(detectedDevices, detectionDiag);
+}
+
+$$("#devVerToggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    devVer = b.dataset.ver;
+    $$("#devVerToggle button").forEach(x => x.classList.toggle("active", x === b));
+    runDetection();
+    if (archData) drawHeat(archData);
+  });
+});
+
+$$("#devModeToggle button").forEach(b => {
+  b.addEventListener("click", () => {
+    devMode = b.dataset.mode;
+    $$("#devModeToggle button").forEach(x => x.classList.toggle("active", x === b));
+    runDetection();
+    if (archData) drawHeat(archData);
+  });
+});
+
+// Slider hookup: update the label next to each slider, then re-run.
+["devThr","devDays","devDur"].forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const val = document.querySelector(`[data-for="${id.replace('dev','dev-').toLowerCase()}"]`);
+  const suffix = id === "devThr" ? " dB" : (id === "devDur" ? " min" : "");
+  const fmt = v => (id === "devThr" ? (+v).toFixed(1) : v) + suffix;
+  if (val) val.textContent = fmt(el.value);
+  el.addEventListener("input", () => {
+    if (val) val.textContent = fmt(el.value);
+    runDetection();
+    if (archData) drawHeat(archData);
+  });
+});
 
 function drawDeviceOverlay(ctx, geom, devices) {
   if (!geom || !devices || !devices.length) return;
@@ -1394,9 +1535,12 @@ function drawDeviceOverlay(ctx, geom, devices) {
   const d0 = new Date(t0 * 1000); d0.setHours(0,0,0,0);
   let mts = Math.floor(d0.getTime() / 1000);
   while (mts < t1 + 86400) { midnights.push(mts); mts += 86400; }
+  const inverted = devices.some(d => d.inverted);
+  const strokeColor = inverted ? "rgba(56,208,237,0.95)" : "rgba(241,196,15,0.9)";
+  const labelColor  = inverted ? "rgba(56,208,237,0.95)" : "rgba(241,196,15,0.95)";
   ctx.save();
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = "rgba(241,196,15,0.9)";
+  ctx.strokeStyle = strokeColor;
   ctx.font = "10px system-ui";
   ctx.textBaseline = "bottom"; ctx.textAlign = "left";
   for (const dev of devices) {
@@ -1417,7 +1561,7 @@ function drawDeviceOverlay(ctx, geom, devices) {
     ctx.fillStyle = "rgba(13,17,23,0.75)";
     const w = ctx.measureText(lbl).width + 6;
     ctx.fillRect(x1 - w, padT + 2, w, 13);
-    ctx.fillStyle = "rgba(241,196,15,0.95)";
+    ctx.fillStyle = labelColor;
     ctx.fillText(lbl, x1 - w + 3, padT + 14);
   }
   ctx.restore();
@@ -1427,13 +1571,14 @@ $$("#devDetectToggle button").forEach(b => {
   b.addEventListener("click", () => {
     devDetectOn = b.dataset.on === "1";
     $$("#devDetectToggle button").forEach(x => x.classList.toggle("active", x === b));
-    if (devDetectOn && archData && archRangeKey === "week") {
-      detectedDevices = detectRhythmicDevices(archData);
-      renderDeviceResults(detectedDevices);
+    if (devDetectOn) {
+      runDetection();
       $("devResults").classList.remove("hidden");
+      $("devControls").classList.remove("hidden");
     } else {
-      detectedDevices = null;
+      detectedDevices = null; detectionDiag = null;
       $("devResults").classList.add("hidden");
+      $("devControls").classList.add("hidden");
     }
     if (archData) drawHeat(archData);
   });
@@ -1448,8 +1593,9 @@ async function loadArchive(rangeKey) {
   } else {
     devToggle.classList.add("hidden");
     devDetectOn = false;
-    detectedDevices = null;
+    detectedDevices = null; detectionDiag = null;
     $("devResults").classList.add("hidden");
+    $("devControls").classList.add("hidden");
     $$("#devDetectToggle button").forEach((x, i) => x.classList.toggle("active", i === 0));
   }
   const now = Math.floor(Date.now()/1000);
@@ -1465,9 +1611,9 @@ async function loadArchive(rangeKey) {
     drawArchRate(archData);
     drawArchPing(archData);
     if (devDetectOn && archRangeKey === "week" && archData) {
-      detectedDevices = detectRhythmicDevices(archData);
-      renderDeviceResults(detectedDevices);
+      runDetection();
       $("devResults").classList.remove("hidden");
+      $("devControls").classList.remove("hidden");
     }
     drawHeat(archData);
     drawSnap(null);

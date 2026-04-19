@@ -8,9 +8,15 @@ A self-contained service that polls a FRITZ!Powerline adapter, records its OFDM 
 
 ## First-time setup
 
-`python3 monitor.py` auto-runs an interactive setup wizard if `config.json` is missing. The wizard prompts for IP/password, validates against the device, auto-discovers the local + remote MAC, and writes `config.json` with chmod 600.
+`python3 monitor.py` auto-runs the interactive wizard if `config.json` is missing (or re-run explicitly via `--setup`). The wizard is cross-platform (Linux / macOS / Windows PowerShell) and walks through:
 
-To re-run the wizard explicitly: `python3 monitor.py --setup`.
+1. Language (English / Deutsch, persisted in `config.json`).
+2. Host discovery — either a parallel HTTP scan of the local /24 (finds every FRITZ device, labels them by model via the HTML title/body) or manual IP/hostname entry.
+3. Password + login with a retry loop — shown in plaintext while typing, then encrypted.
+4. Adapter picker — interactive selection if `ListAdapters` returns multiple active locals/remotes.
+5. Optional settings (HTTP port, ping target; ARP neighbors are suggested as ping-target candidates).
+
+Writes `config.json` (chmod 600) and `.secret` (chmod 600, per-install random salt). Both are in `.gitignore`.
 
 ## Service management
 
@@ -50,14 +56,15 @@ curl -sN http://127.0.0.1:8089/api/live     | head -c 800   # SSE stream
 
 `monitor.py` is structured as discrete sections in this order:
 
-1. **`FritzPlc`** — auth + JSON-RPC-style client. MD5 challenge-response on `/login_sid.lua?version=2` (UTF-16LE encoded; older AVM firmwares such as 07.15 do not support PBKDF2). Three-step spectrum read: `ListAdapters` → `RequestDataHandle` → `RequestData`. A `_lock` serializes calls because the device times out under concurrent requests.
-2. **Schema + spectrum codec** — `samples_live` and `samples_arch` tables, `pack_spectrum`/`unpack_spectrum` (uint16 LE × 6 layers, zlib-compressed → ~960 B/sample vs. ~10 KB JSON).
-3. **`Broadcaster`** — thread-safe SSE fan-out, one `queue.Queue` per subscriber, drops on full.
-4. **Collector loop** — runs every `poll_seconds` (3 s default), pings `ping_target`, writes one row, publishes to broadcaster.
-5. **`rollup()` + `rollup_scheduler()`** — daily at `rollup_hour` (03:00). Aggregates `samples_live` rows older than `live_retention_hours` into 5-min buckets in `samples_arch`, prunes arch beyond `arch_retention_days`, then `VACUUM`s.
-6. **`compute_insights()` / `fetch_range()` / `fetch_snapshot()`** — read paths. `fetch_range` merges live + arch into one bucketed view.
-7. **HTTP `Handler`** — routes; `/api/live` is the long-lived SSE stream that loops on the subscriber's queue with 20 s keepalive pings.
-8. **`setup_wizard()`** — interactive first-run config, requires a TTY.
+1. **Password crypto** — `encrypt_password` / `decrypt_password`. Key = `scrypt(machine_id, salt=.secret, n=2**14)`; body = HMAC-SHA256 counter-mode stream cipher with HMAC-SHA256 auth tag. Stdlib only. Binds the stored password to the host: config leak alone or `.secret` leak alone does not reveal the plaintext. Ciphertext is **not portable** across machines — moving the install means re-running `--setup`.
+2. **`FritzPlc`** — auth + JSON-RPC-style client. MD5 challenge-response on `/login_sid.lua?version=2` (UTF-16LE encoded; older AVM firmwares such as 07.15 do not support PBKDF2). Three-step spectrum read: `ListAdapters` → `RequestDataHandle` → `RequestData`. A `_lock` serializes calls because the device times out under concurrent requests.
+3. **Schema + spectrum codec** — `samples_live` and `samples_arch` tables, `pack_spectrum`/`unpack_spectrum` (uint16 LE × 6 layers, zlib-compressed → ~960 B/sample vs. ~10 KB JSON).
+4. **`Broadcaster`** — thread-safe SSE fan-out, one `queue.Queue` per subscriber, drops on full.
+5. **Collector loop** — runs every `poll_seconds` (3 s default), pings `ping_target`, writes one row, publishes to broadcaster.
+6. **`rollup()` + `rollup_scheduler()`** — daily at `rollup_hour` (03:00). Aggregates `samples_live` rows older than `live_retention_hours` into 5-min buckets in `samples_arch`, prunes arch beyond `arch_retention_days`, then `VACUUM`s.
+7. **`compute_insights()` / `fetch_range()` / `fetch_snapshot()`** — read paths. `fetch_range` merges live + arch into one bucketed view.
+8. **HTTP `Handler`** — routes; `/api/live` is the long-lived SSE stream that loops on the subscriber's queue with 20 s keepalive pings.
+9. **Setup wizard** — `_scan_fritz_hosts` (parallel HTTP probe of local /24 + hostnames), `_probe_fritz` (model label from HTML body, not just `<title>` — powerline title is just "FRITZ!Powerline"), cross-platform discovery (`_local_ip` via UDP-connect trick, `_arp_neighbors` falls back from `ip neigh` to `arp -a`), and localized strings through `T()` against the `_TEXTS` dict.
 
 ### Data semantics — read these before changing anything spectrum-related
 
@@ -92,9 +99,11 @@ Key client-side details:
 
 ## Configuration
 
-`config.json` (chmod 600 — contains the FRITZ password). All keys have defaults in `DEFAULT_CONFIG`. Notable knobs:
+`config.json` (chmod 600) is written by the wizard — **do not hand-edit the password fields**. All keys have defaults in `DEFAULT_CONFIG`. Notable knobs:
 
-- `host`, `password` — FRITZ powerline adapter (NOT the FRITZ!Box).
+- `host` — FRITZ powerline adapter (NOT the FRITZ!Box).
+- `password_enc` / `password_scheme` — encrypted password blob + KDF/cipher identifier. `load_config()` rejects old plaintext `password` fields (hard cutover); re-run `--setup` to migrate. Decryption also requires `.secret` (machine salt, same directory) and the host's `/etc/machine-id` — all three must be co-located.
+- `language` — `"en"` or `"de"`, used by the wizard and by `load_config()` error messages.
 - `local_mac` / `remote_mac` — auto-discovered from `ListAdapters` if `null`.
 - `ping_target` — IP to ICMP ping each cycle. Set to a host *behind the remote adapter* so the round-trip traverses the powerline link. `null` disables ping.
 - `granularity` — passed to `RequestData`. `4` matches the AVM UI default.
@@ -103,5 +112,6 @@ Key client-side details:
 
 - **Don't ever poll the FRITZ from a second client while the daemon is running** — the device only handles one request at a time and will time out. Stop the service first if you need to test against the device manually.
 - **Login lockout**: wrong password triggers exponential `BlockTime` (2 → 4 → 7 → … seconds). The client honours it, but if you've been spamming bad attempts, give the device a minute before retrying.
+- **Mesh-integrated adapters expect the FRITZ!Box password, not the adapter's own "Powerline-Kennwort"**. The login page hints at this — *"Für die Anmeldung sind die Anmeldedaten Ihrer FRITZ!Box erforderlich"* — but the wizard can't detect it programmatically. If login keeps failing with the password printed on the adapter, try the FRITZ!Box admin password.
 - **`RxSlotMask` / `TxSlotMask` change over time** as the chip adapts. The `divider` for SNR scaling must be derived per sample, not cached.
 - **Amateur-band "notches"** (160 m, 80 m, 40 m, …) appear as carriers with `rx_max == 0`. This is regulatory (BNetzA / EN 50561-1), not a measurement error. The dashboard overlays these bands as yellow stripes via `HAM_BANDS` (defined identically in both `monitor.py` and `dashboard.html`).
