@@ -4,15 +4,20 @@ Real-time spectrum + link quality monitor for AVM **FRITZ!Powerline** HomePlug A
 
 Polls the adapter's hidden `/net/plc_json.lua` endpoint to read the per-carrier SNR (the same data shown in the official AVM webui's "Powerline-Spektrum" view), aggregates it into a tiered SQLite store, and renders an SDR-style waterfall + line charts in the browser.
 
+![Dashboard — Woche tab with device-pattern detection (Invertiert mode)](docs/dashboard-week.png)
+
+*Woche tab showing rate + ping history, the frequency × time waterfall, and the device-pattern detection panel (Invertiert mode: cyan outlines around rhythmic SNR dips — household consumers whose switching-on suppresses specific carriers).*
+
 ## Features
 
 - **Live mode** — spectrum + SDR-style waterfall + PHY rate + ICMP ping, pushed to the browser via Server-Sent Events.
 - **Tag / Woche / Monat archive views** with phy/ping time series and a frequency × time waterfall heatmap. Click anywhere in the waterfall to load the spectrum snapshot at that moment.
+- **Rhythmic-device detection** on the Woche tab. Scans the week's Rx heatmap for carriers whose activity (or inactivity, in *Invertiert* mode) repeats at the same time of day on ≥N of the 7 days. Finds timer-driven consumers like aquarium lighting, night-storage heaters or always-on noise sources. Thresholds (dB / min days / min duration) are live-adjustable; V2 masks out amateur-band notches and permanently-disabled carriers so they don't pollute the list.
 - **Tiered storage** — full-resolution samples for the last ~25 h, then 5-minute buckets for 30 days. Daily rollup keeps total DB size under ~40 MB.
 - **Compact spectrum codec** — uint16 + zlib, ~960 B per sample (vs. ~10 KB JSON).
 - **Amateur-radio band overlay** — 160 m … 6 m bands labelled in every spectrum view, makes the regulatory notches visible at a glance.
 - **Info tab** with adapter details, SNR statistics, time-window aggregates, notch detection, and a primer on how HomePlug AV2 works.
-- **Setup wizard** auto-discovers the powerline adapter on the LAN, validates the login against the device, lets you pick between multiple remote adapters if present, suggests a ping target from the ARP table, and stores the password encrypted (scrypt + HMAC-SHA256, machine-bound).
+- **Cross-platform setup wizard** (Linux / macOS / Windows PowerShell) — asks for language (English / Deutsch), parallel-scans the local /24 for FRITZ devices, validates the login against the device with a retry loop on bad passwords, lets you pick between multiple locals/remotes if `ListAdapters` returns more than one, and stores the password encrypted (scrypt + HMAC-SHA256, machine-bound).
 
 No build step, no JS framework, no external Python dependencies — just `python3` and the system `ping` binary.
 
@@ -32,7 +37,7 @@ cd fritz-powerline-monitor
 python3 monitor.py            # launches the setup wizard on first run
 ```
 
-The wizard asks for the powerline adapter's IP/hostname and password, validates the login, auto-discovers the local + remote MAC addresses, and writes `config.json` (chmod 600).
+The wizard prompts for a language (English / Deutsch), offers to scan the local subnet for FRITZ devices, validates the login against the chosen host with a retry loop on bad passwords, auto-discovers the local + remote MAC addresses, and writes `config.json` (chmod 600, password encrypted) plus a machine-bound `.secret` salt file.
 
 After setup, the same command starts the collector and the dashboard:
 
